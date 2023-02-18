@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template for Vertical Federated Learning
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Server init configuration"
+        Parameters:
+          - NumOfClients
+      - Label:
+          default: "VFL parameters"
+        Parameters:
+          - BatchSize
+          - EpochCount
+          - Patience
+
+Parameters:
+  NumOfClients:
+    Type: Number
+    Default: 4
+  BatchSize:
+    Type: Number
+    Default: 1024
+  EpochCount:
+    Type: Number
+    Default: 10
+  Patience:
+    Type: Number
+    Default: 3
+
+Resources:
+  FederatedLearningMainStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: main.asl.yaml
+      DefinitionSubstitutions:
+        ServerInitFunctionArn: !GetAtt ServerInitFunction.Arn
+        NumOfClients: !Ref NumOfClients
+        Patience: !Ref Patience
+        ServerTrainingFunctionArn: !GetAtt ServerTrainingFunction.Arn
+        TrainingStateMachineArn: !Ref FederatedLearningTrainingStateMachine
+        ValidationStateMachineArn: !Ref FederatedLearningValidationStateMachine
+        JudgeScoreFunctionArn: !GetAtt JudgeScoreFunction.Arn
+        PrepareNextEpochFunctionArn: !GetAtt PrepareNextEpochFunction.Arn
+        PassToValidationFunctionArn: !GetAtt PassToValidationFunction.Arn
+        EndTrainingFunctionArn: !GetAtt EndTrainingFunction.Arn
+        VFLBucket: !Ref VFLBucket
+        BatchSize: !Ref BatchSize
+        EpochCount: !Ref EpochCount
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ServerInitFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ServerTrainingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref JudgeScoreFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PrepareNextEpochFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PassToValidationFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref EndTrainingFunction
+        - !Ref StepFunctionsStartExecutionPolicy
+        - !Ref StepFunctionsSQSTaskTokenPolicy
+
+  FederatedLearningTrainingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: training.asl.yaml
+      DefinitionSubstitutions:
+        ServerTrainingFunctionArn: !GetAtt ServerTrainingFunction.Arn
+        PrepareNextBatchFunctionArn: !GetAtt PrepareNextBatchFunction.Arn
+        VFLBucket: !Ref VFLBucket
+        BatchSize: !Ref BatchSize
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ServerTrainingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PrepareNextBatchFunction
+        - !Ref StepFunctionsSQSTaskTokenPolicy
+
+  FederatedLearningValidationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: validation.asl.yaml
+      DefinitionSubstitutions:
+        ServerTrainingFunctionArn: !GetAtt ServerTrainingFunction.Arn
+        PrepareNextVaBatchFunctionArn: !GetAtt PrepareNextVaBatchFunction.Arn
+        VFLBucket: !Ref VFLBucket
+        BatchSize: !Ref BatchSize
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ServerTrainingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PrepareNextVaBatchFunction
+        - !Ref StepFunctionsSQSTaskTokenPolicy
+
+  StepFunctionsStartExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "states:StartExecution"
+            Resource:
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${FederatedLearningTrainingStateMachine.Name}"
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${FederatedLearningValidationStateMachine.Name}"
+          - Effect: Allow
+            Action:
+              - "states:DescribeExecution"
+              - "states:StopExecution"
+            Resource:
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${FederatedLearningTrainingStateMachine.Name}:*"
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${FederatedLearningValidationStateMachine.Name}:*"
+          - Effect: Allow
+            Action:
+              - "events:PutTargets"
+              - "events:PutRule"
+              - "events:DescribeRule"
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+
+  StepFunctionsSQSTaskTokenPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "sqs:SendMessage"
+            Resource: "*"
+
+  ServerInitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Timeout: 60
+      MemorySize: 512
+      Architectures:
+        - arm64
+      Policies:
+        - !Ref ServerInitFunctionSQSAccessPolicy
+        - S3WritePolicy:
+            BucketName: !Ref VFLBucket
+    Metadata:
+      DockerTag: v1
+      DockerContext: functions/init_server/
+      Dockerfile: Dockerfile
+
+  ServerInitFunctionSQSAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "sqs:CreateQueue"
+              - "sqs:PurgeQueue"
+              - "sqs:GetQueueUrl"
+            Resource:
+              - "*"
+
+  EndTrainingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/end_training/
+      Handler: end_training.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+
+  ServerTrainingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Timeout: 300
+      MemorySize: 1024
+      Architectures:
+        - arm64
+      Policies:
+        - !Ref ServerTrainingFunctionPolicy
+    Metadata:
+      DockerTag: v1
+      DockerContext: functions/server_training/
+      Dockerfile: Dockerfile
+  
+  ServerTrainingFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${VFLBucket}/*"
+
+  PrepareNextBatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/prepare_next_batch/
+      Handler: prepare_next_batch.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+
+  PassToValidationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/pass_to_validation/
+      Handler: pass_to_validation.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+
+  PrepareNextVaBatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/prepare_next_validation/
+      Handler: prepare_next_validation.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+
+  JudgeScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/judge_score/
+      Handler: judge_score.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+      Policies:
+        - !Ref JudgeScoreFunctionPolicy
+
+  JudgeScoreFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${VFLBucket}/*"
+
+  PrepareNextEpochFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/prepare_next_epoch/
+      Handler: prepare_next_epoch.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - arm64
+  
+  VFLBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration: 
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  StateMachineArn:
+    Description: The VFL server state machine ARN
+    Value: !Ref FederatedLearningMainStateMachine

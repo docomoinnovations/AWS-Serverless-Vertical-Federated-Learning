@@ -1,0 +1,62 @@
+StartAt: ClientValidation
+States:
+  ClientValidation:
+    Type: Map
+    Iterator:
+      StartAt: ValidationEmbedForward
+      States:
+        ValidationEmbedForward:
+          Type: Task
+          Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+          Parameters:
+            QueueUrl.$: $.SqsUrl
+            MessageBody:
+              BatchSize: ${BatchSize}
+              BatchIndex.$: $.BatchIndex
+              BatchCount.$: $.BatchCount
+              VaBatchIndex.$: $.VaBatchIndex
+              VaBatchCount.$: $.VaBatchCount
+              IsNextBatch.$: $.IsNextBatch
+              IsNextVaBatch.$: $.IsNextVaBatch
+              IsNextEpoch.$: $.IsNextEpoch
+              EpochIndex.$: $.EpochIndex
+              TaskName.$: $.TaskName
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              TaskToken.$: $$.Task.Token
+              StateMachine.$: $$.StateMachine.Id
+              VFLBucket: ${VFLBucket}
+              Direction: Forward
+              Phase: Validation
+          End: true
+    Next: ServerValidation
+  ServerValidation:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${ServerTrainingFunctionArn}
+      Payload:
+        InputItems.$: $
+        BatchSize: ${BatchSize}
+        VFLBucket: ${VFLBucket}
+        Phase: Validation
+    Next: NextVaBatch?
+  NextVaBatch?:
+    Type: Choice
+    InputPath: $.Payload
+    Choices:
+      - Variable: $[0].IsNextVaBatch
+        BooleanEquals: true
+        Next: PrepareNextValidation
+    Default: End
+  PrepareNextValidation:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${PrepareNextVaBatchFunctionArn}
+      Payload:
+        InputItems.$: $
+    OutputPath: $.Payload
+    Next: ClientValidation
+  End:
+    Type: Pass
+    End: true

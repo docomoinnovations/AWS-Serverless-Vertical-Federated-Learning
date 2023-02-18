@@ -1,0 +1,5 @@
+{
+    "sqs_region": "eu-west-1",
+    "sqs_name": "vfl-eu-west-1",
+    "member_id": "3"
+}

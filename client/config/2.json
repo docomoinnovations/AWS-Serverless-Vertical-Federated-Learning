@@ -1,0 +1,5 @@
+{
+    "sqs_region": "us-west-2",
+    "sqs_name": "vfl-us-west-2",
+    "member_id": "2"
+}

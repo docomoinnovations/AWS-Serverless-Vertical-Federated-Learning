@@ -1,0 +1,5 @@
+numpy
+torch
+boto3
+tqdm
+scikit-learn

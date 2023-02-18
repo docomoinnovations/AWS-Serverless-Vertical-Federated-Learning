@@ -1,0 +1,92 @@
+StartAt: "ClientForward"
+States:
+  ClientForward:
+    Type: Map
+    Iterator:
+      StartAt: EmbedForward
+      States:
+        EmbedForward:
+          Type: Task
+          Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+          Parameters:
+            QueueUrl.$: $.SqsUrl
+            MessageBody:
+              BatchSize: ${BatchSize}
+              BatchIndex.$: $.BatchIndex
+              BatchCount.$: $.BatchCount
+              VaBatchIndex.$: $.VaBatchIndex
+              VaBatchCount.$: $.VaBatchCount
+              IsNextBatch.$: $.IsNextBatch
+              IsNextVaBatch.$: $.IsNextVaBatch
+              IsNextEpoch.$: $.IsNextEpoch
+              EpochIndex.$: $.EpochIndex
+              TaskName.$: $.TaskName
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              TaskToken.$: $$.Task.Token
+              StateMachine.$: $$.StateMachine.Id
+              VFLBucket: ${VFLBucket}
+              Direction: Forward
+              Phase: Training
+          End: true
+    Next: ServerTraining
+  ServerTraining:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${ServerTrainingFunctionArn}
+      Payload:
+        InputItems.$: $
+        BatchSize: ${BatchSize}
+        Phase: Training
+        VFLBucket: ${VFLBucket}
+    Next: ClientBackward
+  ClientBackward:
+    Type: Map
+    ItemsPath: $.Payload
+    Iterator:
+      StartAt: GradientBackward
+      States:
+        GradientBackward:
+          Type: Task
+          Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+          Parameters:
+            QueueUrl.$: $.SqsUrl
+            MessageBody:
+              BatchSize: ${BatchSize}
+              BatchIndex.$: $.BatchIndex
+              BatchCount.$: $.BatchCount
+              VaBatchIndex.$: $.VaBatchIndex
+              VaBatchCount.$: $.VaBatchCount
+              IsNextBatch.$: $.IsNextBatch
+              IsNextVaBatch.$: $.IsNextVaBatch
+              IsNextEpoch.$: $.IsNextEpoch
+              EpochIndex.$: $.EpochIndex
+              TaskName.$: $.TaskName
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              GradientFile.$: $.GradientFile
+              TaskToken.$: $$.Task.Token
+              StateMachine.$: $$.StateMachine.Id
+              VFLBucket: ${VFLBucket}
+              Direction: Backward
+              Phase: Training
+          End: true
+    Next: NextBatch?
+  NextBatch?:
+    Type: Choice
+    Choices:
+      - Variable: $[0].IsNextBatch
+        BooleanEquals: true
+        Next: PrepareNextBatch
+    Default: End
+  PrepareNextBatch:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${PrepareNextBatchFunctionArn}
+      Payload:
+        InputItems.$: $
+    OutputPath: $.Payload
+    Next: ClientForward
+  End:
+    Type: Pass
+    End: true

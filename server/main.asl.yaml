@@ -1,0 +1,149 @@
+StartAt: "Initialize"
+States:
+  Initialize:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${ServerInitFunctionArn}
+      Payload:
+        num_of_clients: ${NumOfClients}
+        s3_bucket: ${VFLBucket}
+        batch_size: ${BatchSize}
+        epoch_count: ${EpochCount}
+    OutputPath: $.Payload
+    Next: Training
+  Training:
+    Type: Task
+    Resource: arn:aws:states:::states:startExecution.sync:2
+    Parameters:
+      StateMachineArn: ${TrainingStateMachineArn}
+      Input.$: $
+    TimeoutSeconds: 3600
+    OutputPath: $.Output
+    Next: PassToValidation
+  PassToValidation:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${PassToValidationFunctionArn}
+      Payload:
+        InputItems.$: $
+    OutputPath: $.Payload
+    Next: Validation
+  Validation:
+    Type: Task
+    Resource: arn:aws:states:::states:startExecution.sync:2
+    Parameters:
+      StateMachineArn: ${ValidationStateMachineArn}
+      Input.$: $
+    TimeoutSeconds: 3600
+    OutputPath: $.Output
+    Next: JudgeScore
+  JudgeScore:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${JudgeScoreFunctionArn}
+      Payload:
+        InputItems.$: $
+        VFLBucket: ${VFLBucket}
+        Patience: ${Patience}
+    Next: BestScore?
+  BestScore?:
+    Type: Choice
+    Choices:
+      - Variable: $.Payload[0].IsBestScore
+        BooleanEquals: true
+        Next: SaveClientModel
+    Default: NextEpoch?
+  SaveClientModel:
+    Type: Map
+    ItemsPath: $.Payload
+    Iterator:
+      StartAt: SaveModel
+      States:
+        SaveModel:
+          Type: Task
+          Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+          Parameters:
+            QueueUrl.$: $.SqsUrl
+            MessageBody:
+              BatchSize: ${BatchSize}
+              BatchIndex.$: $.BatchIndex
+              BatchCount.$: $.BatchCount
+              VaBatchIndex.$: $.VaBatchIndex
+              VaBatchCount.$: $.VaBatchCount
+              IsNextBatch.$: $.IsNextBatch
+              IsNextVaBatch.$: $.IsNextVaBatch
+              IsNextEpoch.$: $.IsNextEpoch
+              EpochIndex.$: $.EpochIndex
+              TaskName.$: $.TaskName
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              TaskToken.$: $$.Task.Token
+              StateMachine.$: $$.StateMachine.Id
+              VFLBucket: ${VFLBucket}
+              Direction: N/A
+              Phase: Save
+          End: true
+    Next: SaveServerModel
+  SaveServerModel:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${ServerTrainingFunctionArn}
+      Payload:
+        InputItems.$: $
+        BatchSize: ${BatchSize}
+        VFLBucket: ${VFLBucket}
+        Phase: Save
+    Next: NextEpoch?
+  NextEpoch?:
+    Type: Choice
+    InputPath: $.Payload
+    Choices:
+      - Variable: $[0].IsNextEpoch
+        BooleanEquals: true
+        Next: PrepareNextEpoch
+    Default: TerminateTraining
+  PrepareNextEpoch:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${PrepareNextEpochFunctionArn}
+      Payload:
+        InputItems.$: $
+        EpochCount: ${EpochCount}
+    OutputPath: $.Payload
+    Next: Training
+  TerminateTraining:
+    Type: Map
+    Iterator:
+      StartAt: FinilizeClient
+      States:
+        FinilizeClient:
+          Type: Task
+          Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken
+          Parameters:
+            QueueUrl.$: $.SqsUrl
+            MessageBody:
+              TaskName.$: $.TaskName
+              TaskToken.$: $$.Task.Token
+              StateMachine.$: $$.StateMachine.Id
+              VFLBucket: ${VFLBucket}
+              Direction: Forward
+              Phase: End
+          End: true
+    Next: End
+  End:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Parameters:
+      FunctionName: ${EndTrainingFunctionArn}
+      Payload:
+        InputItems.$: $
+        VFLBucket: ${VFLBucket}
+        NumOfClients: ${NumOfClients}
+        BatchSize: ${BatchSize}
+        EpochCount: ${EpochCount}
+        Patience: ${Patience}
+    End: true
