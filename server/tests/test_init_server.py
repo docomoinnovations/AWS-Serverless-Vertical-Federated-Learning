@@ -1,7 +1,9 @@
 import pytest
 import boto3
-import os
 import torch
+import random
+import string
+import tempfile
 from functions.init_server.serverinit import (
     get_queues_to_create,
     create_sqs,
@@ -10,7 +12,6 @@ from functions.init_server.serverinit import (
     get_batch_count,
     set_shuffled_index,
 )
-import random, string
 
 
 @pytest.mark.parametrize(
@@ -124,11 +125,10 @@ def test_set_shuffled_index(bucket):
     shuffled_index_obj = boto3.resource("s3").Object(
         bucket, f"{task_name}-shuffled-index.pt"
     )
-    shuffled_index_obj.download_file("shuffled-index.pt")
-    shuffled_index = torch.load("shuffled-index.pt")
-    assert get_sample_count(dataset) == len(shuffled_index)
-    os.remove("shuffled-index.pt")
-    os.remove(f"/tmp/{task_name}-shuffled-index.pt")
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        shuffled_index_obj.download_file(f"{tmpdirname}/shuffled-index.pt")
+        shuffled_index = torch.load(f"{tmpdirname}/shuffled-index.pt")
+        assert get_sample_count(dataset) == len(shuffled_index)
 
 
 @pytest.fixture
@@ -156,5 +156,15 @@ def event():
 def test_lambda_handler(event):
     res = lambda_handler(event, {})
     assert len(res) == event["num_of_clients"]
-    shuffled_index_file_name = res[0]["ShuffledIndexPath"].split("/")[-1]
-    os.remove(f"/tmp/{shuffled_index_file_name}")
+    for client in res:
+        assert "SqsUrl" in client
+        assert "BatchIndex" in client
+        assert "BatchCount" in client
+        assert "VaBatchIndex" in client
+        assert "VaBatchCount" in client
+        assert "EpochIndex" in client
+        assert "IsNextEpoch" in client
+        assert "IsNextBatch" in client
+        assert "IsNextVaBatch" in client
+        assert "TaskName" in client
+        assert "ShuffledIndexPath" in client

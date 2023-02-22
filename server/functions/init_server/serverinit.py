@@ -3,6 +3,7 @@ import torch
 import boto3
 import pandas
 import os
+import tempfile
 from time import gmtime, strftime
 
 
@@ -58,11 +59,14 @@ def set_shuffled_index(dataset, task_name, bucket):
     sample_count = get_sample_count(dataset)
     shuffled_index_file_name = f"{task_name}-shuffled-index.pt"
     shuffled_index = torch.randperm(sample_count)
-    torch.save(shuffled_index, f"/tmp/{shuffled_index_file_name}")
-    s3 = boto3.resource("s3")
-    s3.meta.client.upload_file(
-        f"/tmp/{shuffled_index_file_name}", bucket, shuffled_index_file_name
-    )
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        torch.save(shuffled_index, f"{tmpdirname}/{shuffled_index_file_name}")
+        s3 = boto3.resource("s3")
+        s3.meta.client.upload_file(
+            f"/{tmpdirname}/{shuffled_index_file_name}",
+            bucket,
+            shuffled_index_file_name,
+        )
     return f"s3://{bucket}/{shuffled_index_file_name}"
 
 
