@@ -14,7 +14,8 @@ client_configs = {
     "4": "config/4.json",
 }
 
-class Dataset():
+
+class Dataset:
     def __init__(self, client) -> None:
         self.tr_uid = torch.load(f"dataset/client{client}/tr_uid.pt")
         self.tr_x = torch.load(f"dataset/client{client}/tr_x.pt")
@@ -25,13 +26,17 @@ class Dataset():
         self.tr_sample_count = len(self.tr_uid)
         self.va_sample_count = len(self.va_uid)
 
+
 seed = 42
+
+
 def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
+
 
 class ClientModel(torch.nn.Module):
     def __init__(self, in_size, hidden_size):
@@ -41,20 +46,39 @@ class ClientModel(torch.nn.Module):
         set_seed(seed)
         torch.nn.init.xavier_uniform_(self.i2h.weight.data)
         torch.nn.init.ones_(self.i2h.bias.data)
-                
+
     def forward(self, x):
         h = F.relu(self.i2h(x))
         return h
 
-class VFLSQS():
+
+class VFLSQS:
     def __init__(self, name, region) -> None:
         self.name = name
         self.region = region
 
-class TrainingSession():
-    def __init__(self, task_name, batch_size=None, batch_index=None, batch_count=None, is_next_batch=None,
-    va_batch_index=None, va_batch_count=None, is_next_va_batch=None, task_token=None, server_region=None, phase=None, direction=None,
-    epoch_index=None, is_next_epoch=False, s3_bucket=None, shuffled_index_path=None, gradient_file_path=None) -> None:
+
+class TrainingSession:
+    def __init__(
+        self,
+        task_name,
+        batch_size=None,
+        batch_index=None,
+        batch_count=None,
+        is_next_batch=None,
+        va_batch_index=None,
+        va_batch_count=None,
+        is_next_va_batch=None,
+        task_token=None,
+        server_region=None,
+        phase=None,
+        direction=None,
+        epoch_index=None,
+        is_next_epoch=False,
+        s3_bucket=None,
+        shuffled_index_path=None,
+        gradient_file_path=None,
+    ) -> None:
         self.task_name = task_name
         self.batch_size = batch_size
         self.batch_index = batch_index
@@ -69,11 +93,12 @@ class TrainingSession():
         self.shuffled_index_path = shuffled_index_path
         self.task_token = task_token
         self.server_region = server_region
-        self.phase= phase
+        self.phase = phase
         self.direction = direction
         self.gradient_file_path = gradient_file_path
 
-class ClientTrainer():
+
+class ClientTrainer:
     def __init__(self, client_id: str, queue: VFLSQS, dataset: Dataset) -> None:
         self.client_id = client_id
         self.sqs_name = queue.name
@@ -83,7 +108,7 @@ class ClientTrainer():
         self.s3 = boto3.resource("s3")
         self.sqs_url = self.sqs_client.get_queue_url(
             QueueName=self.sqs_name,
-        )['QueueUrl']
+        )["QueueUrl"]
 
         self.tr_uid = dataset.tr_uid
         self.tr_x = dataset.tr_x
@@ -97,7 +122,7 @@ class ClientTrainer():
         self.embed = None
 
         self.tmp_dir = f"tmp/{self.client_id}"
-        Path(f'tmp/{self.client_id}').mkdir(parents=True, exist_ok=True)
+        Path(f"tmp/{self.client_id}").mkdir(parents=True, exist_ok=True)
 
     def start(self):
         while True:
@@ -106,14 +131,12 @@ class ClientTrainer():
             print("----------")
             response = self.sqs_client.receive_message(
                 QueueUrl=self.sqs_url,
-                AttributeNames=[
-                    'SentTimestamp'
-                ],
+                AttributeNames=["SentTimestamp"],
                 MaxNumberOfMessages=1,
                 WaitTimeSeconds=20,
             )
 
-            if 'Messages' in response:
+            if "Messages" in response:
                 message = json.loads(response["Messages"][0]["Body"])
                 self.receipt_handle = response["Messages"][0]["ReceiptHandle"]
 
@@ -140,8 +163,8 @@ class ClientTrainer():
                 self.session.batch_count = int(message["BatchCount"])
                 self.session.va_batch_index = int(message["VaBatchIndex"])
                 self.session.va_batch_count = int(message["VaBatchCount"])
-                self.session.is_next_batch= bool(message["IsNextBatch"])
-                self.session.is_next_va_batch= bool(message["IsNextVaBatch"])
+                self.session.is_next_batch = bool(message["IsNextBatch"])
+                self.session.is_next_va_batch = bool(message["IsNextVaBatch"])
                 self.session.epoch_index = int(message["EpochIndex"])
                 self.session.is_next_epoch = bool(message["IsNextEpoch"])
                 self.session.shuffled_index_path = message["ShuffledIndexPath"]
@@ -152,12 +175,18 @@ class ClientTrainer():
 
                 if self.session.phase == "Save":
                     print("Saving model...")
+                    if not os.path.exists("model"):
+                        os.mkdir("model")
                     model_name = f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
                     self.__save_model(model_name)
                 else:
                     print(f"Epoch Count: {int(self.session.epoch_index) + 1}")
-                    print(f"Batch Count: {int(self.session.batch_index) + 1} / {self.session.batch_count}")
-                    print(f"Validation Batch Count: {int(self.session.va_batch_index) + 1} / {self.session.va_batch_count}")
+                    print(
+                        f"Batch Count: {int(self.session.batch_index) + 1} / {self.session.batch_count}"
+                    )
+                    print(
+                        f"Validation Batch Count: {int(self.session.va_batch_index) + 1} / {self.session.va_batch_count}"
+                    )
 
                 if self.session.phase == "Training":
                     if self.session.direction == "Forward":
@@ -210,7 +239,7 @@ class ClientTrainer():
 
         self.model.train()
 
-        batch_x = self.tr_x[si,:].to()
+        batch_x = self.tr_x[si, :].to()
         self.optimimzer.zero_grad()
         self.embed = self.model(batch_x)
 
@@ -231,13 +260,12 @@ class ClientTrainer():
         tail = min(head + batch_size, len(self.va_uid))
 
         self.model.eval()
-        batch_x = self.va_x[head:tail,:].to()
+        batch_x = self.va_x[head:tail, :].to()
         self.embed = self.model(batch_x)
 
         key = f"{self.session.task_name}-va-embed-{self.client_id}.pt"
         return self.__save_embed(s3_bucket, key)
 
-    
     def __save_model(self, file_path):
         torch.save(self.model.state_dict(), file_path)
 
@@ -251,7 +279,9 @@ class ClientTrainer():
         if self.session.phase == "End":
             output["TaskId"] = self.client_id.zfill(4) + "-end"
         else:
-            output["TaskId"] = self.client_id.zfill(4) + str(self.session.batch_index).zfill(8)
+            output["TaskId"] = self.client_id.zfill(4) + str(
+                self.session.batch_index
+            ).zfill(8)
             output["SqsUrl"] = self.sqs_url
 
         if self.session.direction is not None:
@@ -290,11 +320,15 @@ class ClientTrainer():
         if self.session.shuffled_index_path is not None:
             output["ShuffledIndexPath"] = self.session.shuffled_index_path
 
-        if (self.session.phase == "Training" and self.session.direction == "Forward") or self.session.phase == "Validation":
+        if (
+            self.session.phase == "Training" and self.session.direction == "Forward"
+        ) or self.session.phase == "Validation":
             output["EmbedFile"] = self.embed_file
 
         output = json.dumps(output)
-        stf_client = boto3.client("stepfunctions", region_name=self.session.server_region)
+        stf_client = boto3.client(
+            "stepfunctions", region_name=self.session.server_region
+        )
         stf_client.send_task_success(
             taskToken=self.session.task_token,
             output=output,
@@ -306,15 +340,24 @@ class ClientTrainer():
             QueueUrl=self.sqs_url,
             ReceiptHandle=self.receipt_handle,
         )
-        
+
     def __finalize(self):
-        model_name = f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
+        model_name = (
+            f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
+        )
         key = model_name.split("/")[-1]
         self.s3.meta.client.upload_file(model_name, self.session.s3_bucket, key)
-        os.remove(f"{self.tmp_dir}/{self.session.task_name}-tr-embed-{self.client_id}.pt")
-        os.remove(f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.pt")
-        os.remove(f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.pt")
+        os.remove(
+            f"{self.tmp_dir}/{self.session.task_name}-tr-embed-{self.client_id}.pt"
+        )
+        os.remove(
+            f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.pt"
+        )
+        os.remove(
+            f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.pt"
+        )
         os.remove(f"{self.tmp_dir}/{self.session.task_name}-shuffled-index.pt")
+
 
 if __name__ == "__main__":
     args = sys.argv
@@ -323,7 +366,7 @@ if __name__ == "__main__":
 
     client = args[1]
     config_path = client_configs[client]
-    with open(config_path, 'r') as config_file:
+    with open(config_path, "r") as config_file:
         client_config = json.load(config_file)
 
     sqs_region = client_config["sqs_region"]
