@@ -45,6 +45,50 @@ def bucket_name() -> str:
 
 
 @pytest.mark.parametrize(
+    (
+        "task_name",
+        "num_of_clients",
+        "epoch_index",
+        "batch_index",
+        "batch_size",
+        "va_batch_index",
+    ),
+    [
+        (
+            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+            4,
+            0,
+            0,
+            1024,
+            0,
+        )
+    ],
+)
+def test_training_session(
+    task_name,
+    num_of_clients,
+    epoch_index,
+    batch_index,
+    batch_size,
+    va_batch_index,
+):
+    session = TrainingSession(
+        task_name=task_name,
+        num_of_clients=num_of_clients,
+        epoch_index=epoch_index,
+        batch_index=batch_index,
+        batch_size=batch_size,
+        va_batch_index=va_batch_index,
+    )
+    assert session.task_name == task_name
+    assert session.num_of_clients == num_of_clients
+    assert session.epoch_index == epoch_index
+    assert session.batch_index == batch_index
+    assert session.batch_size == batch_size
+    assert session.va_batch_index == va_batch_index
+
+
+@pytest.mark.parametrize(
     ("training_session"),
     [
         TrainingSession(
