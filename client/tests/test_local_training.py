@@ -1,7 +1,16 @@
 import pytest
 import torch
 import boto3
-from local_training import ClientTrainer, ClientModel, Dataset, VFLSQS, TrainingSession
+import tempfile
+import random
+import string
+from local_training import (
+    ClientTrainer,
+    Dataset,
+    VFLSQS,
+    TrainingSession,
+    ShuffledIndex,
+)
 
 
 @pytest.mark.parametrize(
@@ -185,12 +194,14 @@ def vfl_sqs(request):
 
 
 @pytest.mark.parametrize(
-    ("client", "vfl_sqs", "dataset"),
-    [("1", ["vfl-test-us-west-1", "us-west-1"], "1")],
+    ("client", "vfl_sqs", "dataset", "shuffled_index"),
+    [("1", ["vfl-test-us-west-1", "us-west-1"], "1", ShuffledIndex())],
     indirect=["vfl_sqs", "dataset"],
 )
-def test_init_client_trainer(client, vfl_sqs, dataset):
-    trainer = ClientTrainer(client_id=client, queue=vfl_sqs, dataset=dataset)
+def test_init_client_trainer(client, vfl_sqs, dataset, shuffled_index):
+    trainer = ClientTrainer(
+        client_id=client, queue=vfl_sqs, dataset=dataset, shuffled_index=shuffled_index
+    )
     assert trainer.client_id == client
     assert trainer.sqs_name == vfl_sqs.name
     assert trainer.sqs_region == vfl_sqs.region
@@ -205,7 +216,59 @@ def test_init_client_trainer(client, vfl_sqs, dataset):
     assert len(trainer.va_uid) == len(dataset.va_uid)
     assert len(trainer.va_x) == len(dataset.va_x)
     assert trainer.va_xcols == dataset.va_xcols
+    assert trainer.shuffled_index == shuffled_index
     assert trainer.model
     assert trainer.optimimzer
     assert trainer.embed is None
     assert trainer.tmp_dir == f"tmp/{client}"
+
+
+@pytest.fixture
+def index(request):
+    if request.param is None:
+        yield {"Uri": None, "Object": None}
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        sample_count = len(torch.load("../server/functions/init_server/tr_uid.pt"))
+        index = torch.randperm(sample_count)
+        file_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.pt"
+        local_path = f"{tmpdirname}/{file_name}"
+        torch.save(index, local_path)
+        if request.param == "local":
+            yield {"Uri": local_path, "Object": index}
+        elif request.param == "s3":
+            bucket_name = "".join(
+                [
+                    random.choice(string.ascii_lowercase + string.digits)
+                    for i in range(20)
+                ]
+            )
+            bucket = boto3.resource("s3").Bucket(bucket_name)
+            bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+            bucket.upload_file(local_path, file_name)
+            yield {"Uri": f"s3://{bucket.name}/{file_name}", "Object": index}
+
+            bucket.objects.all().delete()
+            bucket.delete()
+
+
+@pytest.mark.parametrize(("index"), [None, "local", "s3"], indirect=True)
+def test_shuffled_index(index):
+    uri = index["Uri"]
+    expected_object = index["Object"]
+
+    shuffled_index = ShuffledIndex(uri=uri)
+    if uri is None:
+        assert shuffled_index.index is None
+    else:
+        assert shuffled_index.index.tolist() == expected_object.tolist()
+
+    empty_shuffled_index = ShuffledIndex()
+    assert empty_shuffled_index.uri is None
+    assert empty_shuffled_index.index is None
+    empty_shuffled_index.update_if_not_set(uri)
+    if uri is None:
+        assert empty_shuffled_index.uri is None
+        assert empty_shuffled_index.index is None
+    else:
+        assert empty_shuffled_index.uri == uri
+        assert empty_shuffled_index.index.tolist() == expected_object.tolist()
