@@ -1,4 +1,7 @@
-import json, os, sys
+import json
+import os
+import sys
+import tempfile
 from pathlib import Path
 import numpy as np
 import torch
@@ -98,8 +101,37 @@ class TrainingSession:
         self.gradient_file_path = gradient_file_path
 
 
+class ShuffledIndex:
+    def __init__(self, uri: str = None) -> None:
+        self.update(uri)
+
+    def update(self, uri: str):
+        self.uri = uri
+        if uri is None:
+            self.index = None
+        elif uri.startswith("s3://"):
+            bucket_name = uri.split("/")[2]
+            key = "/".join(uri.split("/")[3:])
+            bucket = boto3.resource("s3").Bucket(bucket_name)
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                bucket.download_file(key, f"{tmpdirname}/{key}")
+                self.index = torch.load(f"{tmpdirname}/{key}")
+        else:
+            self.index = torch.load(uri)
+
+    def update_if_not_set(self, uri: str):
+        if self.index is None:
+            self.update(uri=uri)
+
+
 class ClientTrainer:
-    def __init__(self, client_id: str, queue: VFLSQS, dataset: Dataset) -> None:
+    def __init__(
+        self,
+        client_id: str,
+        queue: VFLSQS,
+        dataset: Dataset,
+        shuffled_index: ShuffledIndex,
+    ) -> None:
         self.client_id = client_id
         self.sqs_name = queue.name
         self.sqs_region = queue.region
@@ -116,6 +148,8 @@ class ClientTrainer:
         self.va_uid = dataset.va_uid
         self.va_x = dataset.va_x
         self.va_xcols = dataset.va_xcols
+
+        self.shuffled_index = shuffled_index
 
         self.model = ClientModel(len(self.tr_xcols), 4).to()
         self.optimimzer = torch.optim.Adam(self.model.parameters(), lr=0.01)
@@ -191,7 +225,6 @@ class ClientTrainer:
                 if self.session.phase == "Training":
                     if self.session.direction == "Forward":
                         self.session.s3_bucket = message["VFLBucket"]
-                        self.__set_shuffled_index(self.session.shuffled_index_path)
                         self.embed_file = self.__forward(self.session)
 
                     elif self.session.direction == "Backward":
@@ -204,14 +237,6 @@ class ClientTrainer:
 
                 self.__send_task_success()
                 self.__delete_sqs_message()
-
-    def __set_shuffled_index(self, s3_uri: str):
-        bucket = s3_uri.split("/")[2]
-        key = s3_uri.split("/")[-1]
-        local_path = f"{self.tmp_dir}/{key}"
-        if not os.path.exists(local_path):
-            self.s3.meta.client.download_file(bucket, key, local_path)
-        self.shuffled_index = torch.load(local_path)
 
     def __save_embed(self, bucket: str, key: str) -> str:
         file_name = f"{self.tmp_dir}/{key}"
@@ -233,9 +258,8 @@ class ClientTrainer:
         s3_bucket = session.s3_bucket
         head = batch_index * batch_size
         tail = min(head + batch_size, len(self.tr_uid))
-        if self.shuffled_index is None:
-            self.__set_shuffled_index(self.session.shuffled_index_path)
-        si = self.shuffled_index[head:tail]
+        self.shuffled_index.update_if_not_set(self.session.shuffled_index_path)
+        si = self.shuffled_index.index[head:tail]
 
         self.model.train()
 
@@ -356,7 +380,6 @@ class ClientTrainer:
         os.remove(
             f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.pt"
         )
-        os.remove(f"{self.tmp_dir}/{self.session.task_name}-shuffled-index.pt")
 
 
 if __name__ == "__main__":
@@ -375,5 +398,6 @@ if __name__ == "__main__":
 
     dataset = Dataset(client_id)
     vfl_sqs = VFLSQS(sqs_name, sqs_region)
-    client_trainer = ClientTrainer(client_id, vfl_sqs, dataset)
+    shuffled_index = ShuffledIndex()
+    client_trainer = ClientTrainer(client_id, vfl_sqs, dataset, shuffled_index)
     client_trainer.start()
