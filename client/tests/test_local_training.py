@@ -9,6 +9,7 @@ from local_training import (
     Dataset,
     VFLSQS,
     TrainingSession,
+    ClientModel,
     ShuffledIndex,
 )
 
@@ -194,13 +195,29 @@ def vfl_sqs(request):
 
 
 @pytest.mark.parametrize(
-    ("client", "vfl_sqs", "dataset", "shuffled_index"),
-    [("1", ["vfl-test-us-west-1", "us-west-1"], "1", ShuffledIndex())],
+    ("client", "vfl_sqs", "dataset", "model", "optimizer", "shuffled_index"),
+    [
+        (
+            "1",
+            ["vfl-test-us-west-1", "us-west-1"],
+            "1",
+            ClientModel(17, 4),
+            torch.optim.Adam(ClientModel(17, 4).parameters(), lr=0.01),
+            ShuffledIndex(),
+        )
+    ],
     indirect=["vfl_sqs", "dataset"],
 )
-def test_init_client_trainer(client, vfl_sqs, dataset, shuffled_index):
+def test_init_client_trainer(
+    client, vfl_sqs, dataset, model, optimizer, shuffled_index
+):
     trainer = ClientTrainer(
-        client_id=client, queue=vfl_sqs, dataset=dataset, shuffled_index=shuffled_index
+        client_id=client,
+        queue=vfl_sqs,
+        dataset=dataset,
+        model=model,
+        optimizer=optimizer,
+        shuffled_index=shuffled_index,
     )
     assert trainer.client_id == client
     assert trainer.sqs_name == vfl_sqs.name
@@ -217,8 +234,8 @@ def test_init_client_trainer(client, vfl_sqs, dataset, shuffled_index):
     assert len(trainer.va_x) == len(dataset.va_x)
     assert trainer.va_xcols == dataset.va_xcols
     assert trainer.shuffled_index == shuffled_index
-    assert trainer.model
-    assert trainer.optimimzer
+    assert trainer.model == model.to()
+    assert trainer.optimizer == optimizer
     assert trainer.embed is None
     assert trainer.tmp_dir == f"tmp/{client}"
 
@@ -272,3 +289,13 @@ def test_shuffled_index(index):
     else:
         assert empty_shuffled_index.uri == uri
         assert empty_shuffled_index.index.tolist() == expected_object.tolist()
+
+
+def test_client_model():
+    model = ClientModel(17, 4).to()
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/test-client-model.pt"
+        model.save(file_path)
+        saved_model = ClientModel(17, 4).to()
+        saved_model.load_state_dict(torch.load(file_path))
+        assert len(model.state_dict()) == len(saved_model.state_dict())
