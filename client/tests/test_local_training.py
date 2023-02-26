@@ -4,11 +4,13 @@ import boto3
 import tempfile
 import random
 import string
+import json
 from local_training import (
     ClientTrainer,
     Dataset,
     VFLSQS,
     TrainingSession,
+    ClientModel,
     ShuffledIndex,
 )
 
@@ -194,22 +196,32 @@ def vfl_sqs(request):
 
 
 @pytest.mark.parametrize(
-    ("client", "vfl_sqs", "dataset", "shuffled_index"),
-    [("1", ["vfl-test-us-west-1", "us-west-1"], "1", ShuffledIndex())],
+    ("client", "vfl_sqs", "dataset", "model", "optimizer", "shuffled_index"),
+    [
+        (
+            "1",
+            ["vfl-test-us-west-1", "us-west-1"],
+            "1",
+            ClientModel(17, 4),
+            torch.optim.Adam(ClientModel(17, 4).parameters(), lr=0.01),
+            ShuffledIndex(),
+        )
+    ],
     indirect=["vfl_sqs", "dataset"],
 )
-def test_init_client_trainer(client, vfl_sqs, dataset, shuffled_index):
+def test_init_client_trainer(
+    client, vfl_sqs, dataset, model, optimizer, shuffled_index
+):
     trainer = ClientTrainer(
-        client_id=client, queue=vfl_sqs, dataset=dataset, shuffled_index=shuffled_index
+        client_id=client,
+        queue=vfl_sqs,
+        dataset=dataset,
+        model=model,
+        optimizer=optimizer,
+        shuffled_index=shuffled_index,
     )
     assert trainer.client_id == client
-    assert trainer.sqs_name == vfl_sqs.name
-    assert trainer.sqs_region == vfl_sqs.region
-
-    sqs_url = boto3.client("sqs", region_name=vfl_sqs.region).get_queue_url(
-        QueueName=vfl_sqs.name
-    )["QueueUrl"]
-    assert trainer.sqs_url == sqs_url
+    assert trainer.sqs == vfl_sqs
     assert len(trainer.tr_uid) == len(dataset.tr_uid)
     assert len(trainer.tr_x) == len(dataset.tr_x)
     assert trainer.tr_xcols == dataset.tr_xcols
@@ -217,8 +229,8 @@ def test_init_client_trainer(client, vfl_sqs, dataset, shuffled_index):
     assert len(trainer.va_x) == len(dataset.va_x)
     assert trainer.va_xcols == dataset.va_xcols
     assert trainer.shuffled_index == shuffled_index
-    assert trainer.model
-    assert trainer.optimimzer
+    assert trainer.model == model.to()
+    assert trainer.optimizer == optimizer
     assert trainer.embed is None
     assert trainer.tmp_dir == f"tmp/{client}"
 
@@ -272,3 +284,77 @@ def test_shuffled_index(index):
     else:
         assert empty_shuffled_index.uri == uri
         assert empty_shuffled_index.index.tolist() == expected_object.tolist()
+
+
+def test_client_model():
+    model = ClientModel(17, 4).to()
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/test-client-model.pt"
+        model.save(file_path)
+        saved_model = ClientModel(17, 4).to()
+        saved_model.load_state_dict(torch.load(file_path))
+        assert len(model.state_dict()) == len(saved_model.state_dict())
+
+
+@pytest.fixture
+def sqs():
+    name = "".join(
+        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
+    )
+    region = "us-west-2"
+    client = boto3.client("sqs", region_name=region)
+    client.create_queue(QueueName=name)
+    test_message = {
+        "TaskName": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+        "TaskToken": "1234567890",
+        "Direction": "Forward",
+        "Phase": "Training",
+        "BatchSize": 1024,
+        "BatchIndex": 5,
+        "BatchCount": 6,
+        "VaBatchIndex": 3,
+        "VaBatchCount": 0,
+        "IsNextBatch": True,
+        "IsNextVaBatch": True,
+        "EpochIndex": 3,
+        "IsNextEpoch": True,
+        "ShuffledIndexPath": "s3://test-vfl/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.pt",
+    }
+    message_body = json.dumps(test_message)
+    queue_url = client.get_queue_url(QueueName=name)["QueueUrl"]
+    client.send_message(QueueUrl=queue_url, MessageBody=message_body)
+
+    yield {
+        "Name": name,
+        "Region": region,
+        "Message": test_message,
+    }
+
+    client.delete_queue(QueueUrl=queue_url)
+
+
+def test_vfl_sqs(sqs):
+    name = sqs["Name"]
+    region = sqs["Region"]
+    expected_body = sqs["Message"]
+    vfl_sqs = VFLSQS(name=name, region=region)
+    assert vfl_sqs.name == name
+    assert vfl_sqs.region == region
+
+    message = vfl_sqs.receive_message()
+    assert message.receipt_handle
+    body = json.loads(message.body)
+    assert body["TaskName"] == expected_body["TaskName"]
+    assert body["TaskToken"] == expected_body["TaskToken"]
+    assert body["Direction"] == expected_body["Direction"]
+    assert body["Phase"] == expected_body["Phase"]
+    assert body["BatchSize"] == expected_body["BatchSize"]
+    assert body["BatchIndex"] == expected_body["BatchIndex"]
+    assert body["BatchCount"] == expected_body["BatchCount"]
+    assert body["VaBatchIndex"] == expected_body["VaBatchIndex"]
+    assert body["VaBatchCount"] == expected_body["VaBatchCount"]
+    assert body["IsNextBatch"] == expected_body["IsNextBatch"]
+    assert body["IsNextVaBatch"] == expected_body["IsNextVaBatch"]
+    assert body["EpochIndex"] == expected_body["EpochIndex"]
+    assert body["IsNextEpoch"] == expected_body["IsNextEpoch"]
+    assert body["ShuffledIndexPath"] == expected_body["ShuffledIndexPath"]

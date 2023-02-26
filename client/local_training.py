@@ -54,11 +54,29 @@ class ClientModel(torch.nn.Module):
         h = F.relu(self.i2h(x))
         return h
 
+    def save(self, file_path: str):
+        torch.save(self.state_dict(), file_path)
+
 
 class VFLSQS:
     def __init__(self, name, region) -> None:
         self.name = name
         self.region = region
+
+        client = boto3.client("sqs", region_name=region)
+        queue_url = client.get_queue_url(QueueName=self.name)["QueueUrl"]
+        self.sqs = boto3.resource("sqs", region_name=region).Queue(queue_url)
+
+    def receive_message(self):
+        messages = self.sqs.receive_messages(
+            AttributeNames=["SentTimestamp"],
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=20,
+        )
+        if len(messages) > 0:
+            return messages[0]
+        else:
+            return None
 
 
 class TrainingSession:
@@ -130,18 +148,12 @@ class ClientTrainer:
         client_id: str,
         queue: VFLSQS,
         dataset: Dataset,
+        model: ClientModel,
+        optimizer: torch.optim.Adam,
         shuffled_index: ShuffledIndex,
     ) -> None:
         self.client_id = client_id
-        self.sqs_name = queue.name
-        self.sqs_region = queue.region
-
-        self.sqs_client = boto3.client("sqs", region_name=self.sqs_region)
-        self.s3 = boto3.resource("s3")
-        self.sqs_url = self.sqs_client.get_queue_url(
-            QueueName=self.sqs_name,
-        )["QueueUrl"]
-
+        self.queue = queue
         self.tr_uid = dataset.tr_uid
         self.tr_x = dataset.tr_x
         self.tr_xcols = dataset.tr_xcols
@@ -151,8 +163,8 @@ class ClientTrainer:
 
         self.shuffled_index = shuffled_index
 
-        self.model = ClientModel(len(self.tr_xcols), 4).to()
-        self.optimimzer = torch.optim.Adam(self.model.parameters(), lr=0.01)
+        self.model = model.to()
+        self.optimizer = optimizer
         self.embed = None
 
         self.tmp_dir = f"tmp/{self.client_id}"
@@ -163,16 +175,10 @@ class ClientTrainer:
             print("----------")
             print("Waiting SQS message...")
             print("----------")
-            response = self.sqs_client.receive_message(
-                QueueUrl=self.sqs_url,
-                AttributeNames=["SentTimestamp"],
-                MaxNumberOfMessages=1,
-                WaitTimeSeconds=20,
-            )
+            response = self.queue.receive_message()
 
-            if "Messages" in response:
-                message = json.loads(response["Messages"][0]["Body"])
-                self.receipt_handle = response["Messages"][0]["ReceiptHandle"]
+            if response:
+                message = json.loads(response.body)
 
                 server_region = message["StateMachine"].split(":")[3]
 
@@ -188,7 +194,7 @@ class ClientTrainer:
                     self.session.s3_bucket = message["VFLBucket"]
                     self.__finalize()
                     self.__send_task_success()
-                    self.__delete_sqs_message()
+                    response.delete()
                     print("End training.")
                     break
 
@@ -212,7 +218,7 @@ class ClientTrainer:
                     if not os.path.exists("model"):
                         os.mkdir("model")
                     model_name = f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
-                    self.__save_model(model_name)
+                    self.model.save(model_name)
                 else:
                     print(f"Epoch Count: {int(self.session.epoch_index) + 1}")
                     print(
@@ -236,7 +242,7 @@ class ClientTrainer:
                     self.embed_file = self.__validate()
 
                 self.__send_task_success()
-                self.__delete_sqs_message()
+                response.delete()
 
     def __save_embed(self, bucket: str, key: str) -> str:
         file_name = f"{self.tmp_dir}/{key}"
@@ -264,7 +270,7 @@ class ClientTrainer:
         self.model.train()
 
         batch_x = self.tr_x[si, :].to()
-        self.optimimzer.zero_grad()
+        self.optimizer.zero_grad()
         self.embed = self.model(batch_x)
 
         key = f"{self.session.task_name}-tr-embed-{self.client_id}.pt"
@@ -274,7 +280,7 @@ class ClientTrainer:
         self.model.train()
         self.__set_gradient(self.session.gradient_file_path)
         self.embed.backward(self.gradient)
-        self.optimimzer.step()
+        self.optimizer.step()
 
     def __validate(self):
         s3_bucket = self.session.s3_bucket
@@ -290,9 +296,6 @@ class ClientTrainer:
         key = f"{self.session.task_name}-va-embed-{self.client_id}.pt"
         return self.__save_embed(s3_bucket, key)
 
-    def __save_model(self, file_path):
-        torch.save(self.model.state_dict(), file_path)
-
     def __send_task_success(self):
         output = {}
         output["MemberId"] = str(self.client_id)
@@ -306,7 +309,7 @@ class ClientTrainer:
             output["TaskId"] = self.client_id.zfill(4) + str(
                 self.session.batch_index
             ).zfill(8)
-            output["SqsUrl"] = self.sqs_url
+            output["SqsUrl"] = self.queue.sqs.url
 
         if self.session.direction is not None:
             output["Direction"] = self.session.direction
@@ -359,12 +362,6 @@ class ClientTrainer:
         )
         stf_client.close()
 
-    def __delete_sqs_message(self):
-        self.sqs_client.delete_message(
-            QueueUrl=self.sqs_url,
-            ReceiptHandle=self.receipt_handle,
-        )
-
     def __finalize(self):
         model_name = (
             f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
@@ -398,6 +395,10 @@ if __name__ == "__main__":
 
     dataset = Dataset(client_id)
     vfl_sqs = VFLSQS(sqs_name, sqs_region)
+    model = ClientModel(len(dataset.tr_xcols), 4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     shuffled_index = ShuffledIndex()
-    client_trainer = ClientTrainer(client_id, vfl_sqs, dataset, shuffled_index)
+    client_trainer = ClientTrainer(
+        client_id, vfl_sqs, dataset, model, optimizer, shuffled_index
+    )
     client_trainer.start()
