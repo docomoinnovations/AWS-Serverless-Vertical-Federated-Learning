@@ -63,6 +63,21 @@ class VFLSQS:
         self.name = name
         self.region = region
 
+        client = boto3.client("sqs", region_name=region)
+        queue_url = client.get_queue_url(QueueName=self.name)["QueueUrl"]
+        self.sqs = boto3.resource("sqs", region_name=region).Queue(queue_url)
+
+    def receive_message(self):
+        messages = self.sqs.receive_messages(
+            AttributeNames=["SentTimestamp"],
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=20,
+        )
+        if len(messages) > 0:
+            return messages[0]
+        else:
+            return None
+
 
 class TrainingSession:
     def __init__(
@@ -138,15 +153,7 @@ class ClientTrainer:
         shuffled_index: ShuffledIndex,
     ) -> None:
         self.client_id = client_id
-        self.sqs_name = queue.name
-        self.sqs_region = queue.region
-
-        self.sqs_client = boto3.client("sqs", region_name=self.sqs_region)
-        self.s3 = boto3.resource("s3")
-        self.sqs_url = self.sqs_client.get_queue_url(
-            QueueName=self.sqs_name,
-        )["QueueUrl"]
-
+        self.queue = queue
         self.tr_uid = dataset.tr_uid
         self.tr_x = dataset.tr_x
         self.tr_xcols = dataset.tr_xcols
@@ -168,16 +175,10 @@ class ClientTrainer:
             print("----------")
             print("Waiting SQS message...")
             print("----------")
-            response = self.sqs_client.receive_message(
-                QueueUrl=self.sqs_url,
-                AttributeNames=["SentTimestamp"],
-                MaxNumberOfMessages=1,
-                WaitTimeSeconds=20,
-            )
+            response = self.queue.receive_message()
 
-            if "Messages" in response:
-                message = json.loads(response["Messages"][0]["Body"])
-                self.receipt_handle = response["Messages"][0]["ReceiptHandle"]
+            if response:
+                message = json.loads(response.body)
 
                 server_region = message["StateMachine"].split(":")[3]
 
@@ -193,7 +194,7 @@ class ClientTrainer:
                     self.session.s3_bucket = message["VFLBucket"]
                     self.__finalize()
                     self.__send_task_success()
-                    self.__delete_sqs_message()
+                    response.delete()
                     print("End training.")
                     break
 
@@ -241,7 +242,7 @@ class ClientTrainer:
                     self.embed_file = self.__validate()
 
                 self.__send_task_success()
-                self.__delete_sqs_message()
+                response.delete()
 
     def __save_embed(self, bucket: str, key: str) -> str:
         file_name = f"{self.tmp_dir}/{key}"
@@ -308,7 +309,7 @@ class ClientTrainer:
             output["TaskId"] = self.client_id.zfill(4) + str(
                 self.session.batch_index
             ).zfill(8)
-            output["SqsUrl"] = self.sqs_url
+            output["SqsUrl"] = self.queue.sqs.url
 
         if self.session.direction is not None:
             output["Direction"] = self.session.direction
@@ -360,12 +361,6 @@ class ClientTrainer:
             output=output,
         )
         stf_client.close()
-
-    def __delete_sqs_message(self):
-        self.sqs_client.delete_message(
-            QueueUrl=self.sqs_url,
-            ReceiptHandle=self.receipt_handle,
-        )
 
     def __finalize(self):
         model_name = (
