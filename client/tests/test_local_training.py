@@ -65,21 +65,6 @@ def test_dataset(client, uid, x, cols, va_uid, va_x):
 
 
 @pytest.mark.parametrize(
-    ("name", "region"),
-    [
-        ("vfl-us-west-2", "us-west-2"),
-        ("vfl-us-east-1", "us-east-1"),
-        ("vfl-eu-west-1", "eu-west-1"),
-        ("vfl-ap-northeast-1", "ap-northeast-1"),
-    ],
-)
-def test_vfl_sqs(name, region):
-    sqs = VFLSQS(name=name, region=region)
-    assert sqs.name == name
-    assert sqs.region == region
-
-
-@pytest.mark.parametrize(
     (
         "task_name",
         "batch_size",
@@ -221,7 +206,8 @@ def test_init_client_trainer(
         shuffled_index=shuffled_index,
     )
     assert trainer.client_id == client
-    assert trainer.sqs == vfl_sqs
+    assert trainer.queue == vfl_sqs
+    assert trainer.s3
     assert len(trainer.tr_uid) == len(dataset.tr_uid)
     assert len(trainer.tr_x) == len(dataset.tr_x)
     assert trainer.tr_xcols == dataset.tr_xcols

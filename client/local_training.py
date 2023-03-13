@@ -154,6 +154,7 @@ class ClientTrainer:
     ) -> None:
         self.client_id = client_id
         self.queue = queue
+        self.s3 = boto3.resource("s3")
         self.tr_uid = dataset.tr_uid
         self.tr_x = dataset.tr_x
         self.tr_xcols = dataset.tr_xcols
