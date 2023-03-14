@@ -114,3 +114,6 @@ Both the server and the clients are set up, you can run the experiment.
 You can evaluate the model's accuracy once the training is completed. 
 
 [Testing Model](test/README.md)
+
+# Dataset Reference
+- Dua, D. and Graff, C. (2019). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science.
