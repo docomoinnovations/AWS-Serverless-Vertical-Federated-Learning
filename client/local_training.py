@@ -20,11 +20,21 @@ client_configs = {
 
 class Dataset:
     def __init__(self, client) -> None:
-        self.tr_uid = torch.load(f"dataset/client{client}/tr_uid.pt")
-        self.tr_x = torch.load(f"dataset/client{client}/tr_x.pt")
-        self.tr_xcols = torch.load(f"dataset/client{client}/cols.pt")
-        self.va_uid = torch.load(f"dataset/client{client}/va_uid.pt")
-        self.va_x = torch.load(f"dataset/client{client}/va_x.pt")
+        self.tr_uid = torch.LongTensor(
+            np.load(f"dataset/client{client}/tr_uid.npy", allow_pickle=False)
+        )
+        self.tr_x = torch.FloatTensor(
+            np.load(f"dataset/client{client}/tr_x.npy", allow_pickle=False)
+        )
+        self.tr_xcols = np.load(
+            f"dataset/client{client}/cols.npy", allow_pickle=False
+        ).tolist()
+        self.va_uid = torch.LongTensor(
+            np.load(f"dataset/client{client}/va_uid.npy", allow_pickle=False)
+        )
+        self.va_x = torch.FloatTensor(
+            np.load(f"dataset/client{client}/va_x.npy", allow_pickle=False)
+        )
         self.va_xcols = self.tr_xcols
         self.tr_sample_count = len(self.tr_uid)
         self.va_sample_count = len(self.va_uid)
@@ -133,9 +143,11 @@ class ShuffledIndex:
             bucket = boto3.resource("s3").Bucket(bucket_name)
             with tempfile.TemporaryDirectory() as tmpdirname:
                 bucket.download_file(key, f"{tmpdirname}/{key}")
-                self.index = torch.load(f"{tmpdirname}/{key}")
+                self.index = torch.LongTensor(
+                    np.load(f"{tmpdirname}/{key}", allow_pickle=False)
+                )
         else:
-            self.index = torch.load(uri)
+            self.index = torch.LongTensor(np.load(uri, allow_pickle=False))
 
     def update_if_not_set(self, uri: str):
         if self.index is None:
@@ -247,7 +259,7 @@ class ClientTrainer:
 
     def __save_embed(self, bucket: str, key: str) -> str:
         file_name = f"{self.tmp_dir}/{key}"
-        torch.save(self.embed.detach().cpu(), file_name)
+        np.save(file_name, self.embed.detach().cpu().numpy(), allow_pickle=False)
         key = file_name.split("/")[-1]
         self.s3.meta.client.upload_file(file_name, bucket, key)
         return f"s3://{bucket}/{file_name}"
@@ -257,7 +269,9 @@ class ClientTrainer:
         key = s3_uri.split("/")[-1]
         local_file_path = f"{self.tmp_dir}/{key}"
         self.s3.meta.client.download_file(bucket, key, local_file_path)
-        self.gradient = torch.load(local_file_path).to()
+        self.gradient = torch.FloatTensor(
+            np.load(local_file_path, allow_pickle=False)
+        ).to()
 
     def __forward(self, session: TrainingSession) -> str:
         batch_index = session.batch_index
@@ -274,7 +288,7 @@ class ClientTrainer:
         self.optimizer.zero_grad()
         self.embed = self.model(batch_x)
 
-        key = f"{self.session.task_name}-tr-embed-{self.client_id}.pt"
+        key = f"{self.session.task_name}-tr-embed-{self.client_id}.npy"
         return self.__save_embed(s3_bucket, key)
 
     def __backward(self):
@@ -294,7 +308,7 @@ class ClientTrainer:
         batch_x = self.va_x[head:tail, :].to()
         self.embed = self.model(batch_x)
 
-        key = f"{self.session.task_name}-va-embed-{self.client_id}.pt"
+        key = f"{self.session.task_name}-va-embed-{self.client_id}.npy"
         return self.__save_embed(s3_bucket, key)
 
     def __send_task_success(self):
@@ -370,13 +384,13 @@ class ClientTrainer:
         key = model_name.split("/")[-1]
         self.s3.meta.client.upload_file(model_name, self.session.s3_bucket, key)
         os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-tr-embed-{self.client_id}.pt"
+            f"{self.tmp_dir}/{self.session.task_name}-tr-embed-{self.client_id}.npy"
         )
         os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.pt"
+            f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.npy"
         )
         os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.pt"
+            f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.npy"
         )
 
 

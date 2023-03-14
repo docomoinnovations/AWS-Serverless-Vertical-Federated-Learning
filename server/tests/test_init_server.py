@@ -1,6 +1,7 @@
 import pytest
 import boto3
 import torch
+import numpy as np
 import random
 import string
 import tempfile
@@ -79,8 +80,8 @@ def test_create_sqs(prep_create_sqs):
 @pytest.mark.parametrize(
     ("dataset", "expected"),
     [
-        ("functions/init_server/tr_uid.pt", 29304),
-        ("functions/init_server/va_uid.pt", 3257),
+        ("functions/init_server/tr_uid.npy", 29304),
+        ("functions/init_server/va_uid.npy", 3257),
     ],
 )
 def test_get_sample_count(dataset, expected):
@@ -90,10 +91,10 @@ def test_get_sample_count(dataset, expected):
 @pytest.mark.parametrize(
     ("dataset", "batch_size", "expected"),
     [
-        ("functions/init_server/tr_uid.pt", 1024, 29),
-        ("functions/init_server/va_uid.pt", 1024, 4),
-        ("functions/init_server/tr_uid.pt", 4096, 8),
-        ("functions/init_server/va_uid.pt", 4096, 1),
+        ("functions/init_server/tr_uid.npy", 1024, 29),
+        ("functions/init_server/va_uid.npy", 1024, 4),
+        ("functions/init_server/tr_uid.npy", 4096, 8),
+        ("functions/init_server/va_uid.npy", 4096, 1),
     ],
 )
 def test_get_batch_count(dataset, batch_size, expected):
@@ -117,17 +118,19 @@ def bucket() -> str:
 
 def test_set_shuffled_index(bucket):
     task_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss"
-    dataset = "functions/init_server/tr_uid.pt"
+    dataset = "functions/init_server/tr_uid.npy"
 
     s3_url = set_shuffled_index(dataset=dataset, task_name=task_name, bucket=bucket)
-    assert s3_url == f"s3://{bucket}/{task_name}-shuffled-index.pt"
+    assert s3_url == f"s3://{bucket}/{task_name}-shuffled-index.npy"
 
     shuffled_index_obj = boto3.resource("s3").Object(
-        bucket, f"{task_name}-shuffled-index.pt"
+        bucket, f"{task_name}-shuffled-index.npy"
     )
     with tempfile.TemporaryDirectory() as tmpdirname:
-        shuffled_index_obj.download_file(f"{tmpdirname}/shuffled-index.pt")
-        shuffled_index = torch.load(f"{tmpdirname}/shuffled-index.pt")
+        shuffled_index_obj.download_file(f"{tmpdirname}/shuffled-index.npy")
+        shuffled_index = torch.LongTensor(
+            np.load(f"{tmpdirname}/shuffled-index.npy", allow_pickle=False)
+        )
         assert get_sample_count(dataset) == len(shuffled_index)
 
 
