@@ -3,6 +3,7 @@ import boto3
 import random
 import string
 import torch
+import numpy as np
 from functions.server_training.server_training import (
     ServerTrainer,
     TrainingSession,
@@ -14,15 +15,48 @@ from functions.init_server.serverinit import set_shuffled_index
 def test_init_dataset():
     dataset_dir = "functions/server_training"
     dataset = DataSet(
-        label=f"{dataset_dir}/tr_y.pt",
-        uid=f"{dataset_dir}/tr_uid.pt",
-        va_label=f"{dataset_dir}/va_y.pt",
-        va_uid=f"{dataset_dir}/va_uid.pt",
+        label=f"{dataset_dir}/tr_y.npy",
+        uid=f"{dataset_dir}/tr_uid.npy",
+        va_label=f"{dataset_dir}/va_y.npy",
+        va_uid=f"{dataset_dir}/va_uid.npy",
     )
-    assert len(dataset.label) == len(torch.load(f"{dataset_dir}/tr_y.pt"))
-    assert len(dataset.uid) == len(torch.load(f"{dataset_dir}/tr_uid.pt"))
-    assert len(dataset.va_label) == len(torch.load(f"{dataset_dir}/va_y.pt"))
-    assert len(dataset.va_uid) == len(torch.load(f"{dataset_dir}/va_uid.pt"))
+
+    assert (
+        dataset.label.dtype
+        == torch.FloatTensor(
+            np.load(f"{dataset_dir}/tr_y.npy", allow_pickle=False)
+        ).dtype
+    )
+    assert len(dataset.label) == len(
+        torch.FloatTensor(np.load(f"{dataset_dir}/tr_y.npy", allow_pickle=False))
+    )
+    assert (
+        dataset.uid.dtype
+        == torch.LongTensor(
+            np.load(f"{dataset_dir}/tr_uid.npy", allow_pickle=False)
+        ).dtype
+    )
+    assert len(dataset.uid) == len(
+        torch.LongTensor(np.load(f"{dataset_dir}/tr_uid.npy", allow_pickle=False))
+    )
+    assert (
+        dataset.va_label.dtype
+        == torch.FloatTensor(
+            np.load(f"{dataset_dir}/va_y.npy", allow_pickle=False)
+        ).dtype
+    )
+    assert len(dataset.va_label) == len(
+        torch.FloatTensor(np.load(f"{dataset_dir}/va_y.npy", allow_pickle=False))
+    )
+    assert (
+        dataset.va_uid.dtype
+        == torch.LongTensor(
+            np.load(f"{dataset_dir}/va_uid.npy", allow_pickle=False)
+        ).dtype
+    )
+    assert len(dataset.va_uid) == len(
+        torch.LongTensor(np.load(f"{dataset_dir}/va_uid.npy", allow_pickle=False))
+    )
 
 
 @pytest.fixture
@@ -35,7 +69,7 @@ def bucket_name() -> str:
     bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
     set_shuffled_index(
-        f"functions/init_server/tr_uid.pt", "VFL-TAKS-YYYY-MM-DD-HH-mm-ss", bucket.name
+        f"functions/init_server/tr_uid.npy", "VFL-TAKS-YYYY-MM-DD-HH-mm-ss", bucket.name
     )
 
     yield bucket.name
@@ -103,10 +137,10 @@ def test_training_session(
 )
 def test_init_server_trainer(training_session, bucket_name):
     dataset_dir = "functions/server_training"
-    label = f"{dataset_dir}/tr_y.pt"
-    uid = f"{dataset_dir}/tr_uid.pt"
-    va_label = f"{dataset_dir}/va_y.pt"
-    va_uid = f"{dataset_dir}/va_uid.pt"
+    label = f"{dataset_dir}/tr_y.npy"
+    uid = f"{dataset_dir}/tr_uid.npy"
+    va_label = f"{dataset_dir}/va_y.npy"
+    va_uid = f"{dataset_dir}/va_uid.npy"
 
     dataset = DataSet(label=label, uid=uid, va_label=va_label, va_uid=va_uid)
 

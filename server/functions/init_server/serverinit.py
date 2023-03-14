@@ -2,6 +2,7 @@ import math
 import torch
 import boto3
 import pandas
+import numpy as np
 import os
 import tempfile
 from time import gmtime, strftime
@@ -44,7 +45,7 @@ def sqs_purge(sqs_region, sqs_name):
 
 # Get number of sample data
 def get_sample_count(file):
-    uid = torch.load(file)
+    uid = torch.LongTensor(np.load(file, allow_pickle=False))
     return len(uid)
 
 
@@ -57,10 +58,14 @@ def get_batch_count(dataset, batch_size):
 # Shuffled index
 def set_shuffled_index(dataset, task_name, bucket):
     sample_count = get_sample_count(dataset)
-    shuffled_index_file_name = f"{task_name}-shuffled-index.pt"
+    shuffled_index_file_name = f"{task_name}-shuffled-index.npy"
     shuffled_index = torch.randperm(sample_count)
     with tempfile.TemporaryDirectory() as tmpdirname:
-        torch.save(shuffled_index, f"{tmpdirname}/{shuffled_index_file_name}")
+        np.save(
+            f"{tmpdirname}/{shuffled_index_file_name}",
+            shuffled_index.numpy(),
+            allow_pickle=False,
+        )
         s3 = boto3.resource("s3")
         s3.meta.client.upload_file(
             f"/{tmpdirname}/{shuffled_index_file_name}",
@@ -89,10 +94,10 @@ def lambda_handler(event, context):
 
     task_name = "VFL-Task-" + strftime("%Y-%m-%d-%H-%M-%S", gmtime())
     batch_size = int(event["batch_size"])
-    batch_count = get_batch_count(dataset=f"{dir}/tr_uid.pt", batch_size=batch_size)
-    va_batch_count = get_batch_count(dataset=f"{dir}/va_uid.pt", batch_size=batch_size)
+    batch_count = get_batch_count(dataset=f"{dir}/tr_uid.npy", batch_size=batch_size)
+    va_batch_count = get_batch_count(dataset=f"{dir}/va_uid.npy", batch_size=batch_size)
     shuffled_index_path = set_shuffled_index(
-        dataset=f"{dir}/tr_uid.pt", task_name=task_name, bucket=s3_bucket
+        dataset=f"{dir}/tr_uid.npy", task_name=task_name, bucket=s3_bucket
     )
     epoch_count = int(event["epoch_count"])
 

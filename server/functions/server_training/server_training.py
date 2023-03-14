@@ -19,13 +19,17 @@ def set_seed(seed):
 
 class DataSet:
     def __init__(
-        self, label="tr_y.pt", uid="tr_uid.pt", va_label="va_y.pt", va_uid="va_uid.pt"
+        self,
+        label="tr_y.npy",
+        uid="tr_uid.npy",
+        va_label="va_y.npy",
+        va_uid="va_uid.npy",
     ) -> None:
         label
-        self.label = torch.load(label)
-        self.uid = torch.load(uid)
-        self.va_label = torch.load(va_label)
-        self.va_uid = torch.load(va_uid)
+        self.label = torch.FloatTensor(np.load(label, allow_pickle=False))
+        self.uid = torch.LongTensor(np.load(uid, allow_pickle=False))
+        self.va_label = torch.FloatTensor(np.load(va_label, allow_pickle=False))
+        self.va_uid = torch.LongTensor(np.load(va_uid, allow_pickle=False))
 
 
 class ServerModel(torch.nn.Module):
@@ -94,9 +98,11 @@ class ServerTrainer:
 
         # Init shuffled index
         shuffled_index_path = self.__download_file_from_s3(
-            f"{self.task_name}-shuffled-index.pt"
+            f"{self.task_name}-shuffled-index.npy"
         )
-        self.shuffled_index = torch.load(shuffled_index_path)
+        self.shuffled_index = torch.LongTensor(
+            np.load(shuffled_index_path, allow_pickle=False)
+        )
 
         # Init tr_uid
         self.tr_uid = dataset.uid
@@ -139,16 +145,16 @@ class ServerTrainer:
         if self.batch_index == 0:
             self.tr_pred = np.zeros(self.tr_y.shape)
         else:
-            tr_pred_file = self.__download_file_from_s3(f"{self.task_name}-tr-pred.pt")
-            self.tr_pred = torch.load(tr_pred_file)
+            tr_pred_file = self.__download_file_from_s3(f"{self.task_name}-tr-pred.npy")
+            self.tr_pred = np.load(tr_pred_file, allow_pickle=False)
 
         # Load pred and true for validation
         self.va_true = self.va_y
         if self.va_batch_index == 0:
             self.va_pred = np.zeros(self.va_y.shape)
         else:
-            va_pred_file = self.__download_file_from_s3(f"{self.task_name}-va-pred.pt")
-            self.va_pred = torch.load(va_pred_file)
+            va_pred_file = self.__download_file_from_s3(f"{self.task_name}-va-pred.npy")
+            self.va_pred = np.load(va_pred_file, allow_pickle=False)
 
     def __download_file_from_s3(self, s3_key) -> str:
         file_name = s3_key.split("/")[-1]
@@ -166,14 +172,16 @@ class ServerTrainer:
         file_name = s3_key.split("/")[-1]
         file_path = f"/tmp/{file_name}"
         self.__download_file_from_s3(file_name)
-        self.embeds[client_id] = torch.load(file_path)
+        self.embeds[client_id] = torch.FloatTensor(
+            np.load(file_path, allow_pickle=False)
+        )
 
     def save_gradient(self, file_name_prefix=None) -> dict:
         embed_files_s3_path = dict()
         for client_id in self.gradients.keys():
-            file_name = f"{self.task_name if file_name_prefix is None else file_name_prefix}-gradient-{client_id}.pt"
+            file_name = f"{self.task_name if file_name_prefix is None else file_name_prefix}-gradient-{client_id}.npy"
             local_path = self.tmp_dir + file_name
-            torch.save(self.gradients[client_id], local_path)
+            np.save(local_path, self.gradients[client_id].numpy(), allow_pickle=False)
             self.__upload_file_to_s3(local_path, file_name)
             embed_files_s3_path[client_id] = f"s3://{self.s3_bucket}/{file_name}"
         return embed_files_s3_path
@@ -207,15 +215,15 @@ class ServerTrainer:
         self.__upload_file_to_s3(loss_file, file_name)
 
     def save_tr_pred(self, file_name=None) -> None:
-        file_name = f"{self.task_name}-tr-pred.pt" if file_name is None else file_name
+        file_name = f"{self.task_name}-tr-pred.npy" if file_name is None else file_name
         local_file_path = self.tmp_dir + file_name
-        torch.save(self.tr_pred, local_file_path)
+        np.save(local_file_path, self.tr_pred, allow_pickle=False)
         self.__upload_file_to_s3(local_file_path, file_name)
 
     def save_va_pred(self, file_name=None) -> None:
-        file_name = f"{self.task_name}-va-pred.pt" if file_name is None else file_name
+        file_name = f"{self.task_name}-va-pred.npy" if file_name is None else file_name
         local_file_path = self.tmp_dir + file_name
-        torch.save(self.va_pred, local_file_path)
+        np.save(local_file_path, self.va_pred, allow_pickle=False)
         self.__upload_file_to_s3(local_file_path, file_name)
 
     def train(self) -> None:

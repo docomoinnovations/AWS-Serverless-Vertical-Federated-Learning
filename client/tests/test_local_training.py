@@ -1,5 +1,6 @@
 import pytest
 import torch
+import numpy as np
 import boto3
 import tempfile
 import random
@@ -20,48 +21,69 @@ from local_training import (
     [
         (
             "1",
-            "dataset/client1/tr_uid.pt",
-            "dataset/client1/tr_x.pt",
-            "dataset/client1/cols.pt",
-            "dataset/client1/va_uid.pt",
-            "dataset/client1/va_x.pt",
+            "dataset/client1/tr_uid.npy",
+            "dataset/client1/tr_x.npy",
+            "dataset/client1/cols.npy",
+            "dataset/client1/va_uid.npy",
+            "dataset/client1/va_x.npy",
         ),
         (
             "2",
-            "dataset/client2/tr_uid.pt",
-            "dataset/client2/tr_x.pt",
-            "dataset/client2/cols.pt",
-            "dataset/client2/va_uid.pt",
-            "dataset/client2/va_x.pt",
+            "dataset/client2/tr_uid.npy",
+            "dataset/client2/tr_x.npy",
+            "dataset/client2/cols.npy",
+            "dataset/client2/va_uid.npy",
+            "dataset/client2/va_x.npy",
         ),
         (
             "3",
-            "dataset/client3/tr_uid.pt",
-            "dataset/client3/tr_x.pt",
-            "dataset/client3/cols.pt",
-            "dataset/client3/va_uid.pt",
-            "dataset/client3/va_x.pt",
+            "dataset/client3/tr_uid.npy",
+            "dataset/client3/tr_x.npy",
+            "dataset/client3/cols.npy",
+            "dataset/client3/va_uid.npy",
+            "dataset/client3/va_x.npy",
         ),
         (
             "4",
-            "dataset/client4/tr_uid.pt",
-            "dataset/client4/tr_x.pt",
-            "dataset/client4/cols.pt",
-            "dataset/client4/va_uid.pt",
-            "dataset/client4/va_x.pt",
+            "dataset/client4/tr_uid.npy",
+            "dataset/client4/tr_x.npy",
+            "dataset/client4/cols.npy",
+            "dataset/client4/va_uid.npy",
+            "dataset/client4/va_x.npy",
         ),
     ],
 )
 def test_dataset(client, uid, x, cols, va_uid, va_x):
     dataset = Dataset(client=client)
-    assert len(dataset.tr_uid) == len(torch.load(uid))
-    assert len(dataset.tr_x) == len(torch.load(x))
-    assert dataset.tr_xcols == torch.load(cols)
-    assert len(dataset.va_uid) == len(torch.load(va_uid))
-    assert len(dataset.va_x) == len(torch.load(va_x))
+    assert (
+        dataset.tr_uid.dtype == torch.LongTensor(np.load(uid, allow_pickle=False)).dtype
+    )
+    assert len(dataset.tr_uid) == len(
+        torch.LongTensor(np.load(uid, allow_pickle=False))
+    )
+    assert dataset.tr_x.dtype == torch.FloatTensor(np.load(x, allow_pickle=False)).dtype
+    assert len(dataset.tr_x) == len(torch.FloatTensor(np.load(x, allow_pickle=False)))
+    assert dataset.tr_xcols == np.load(cols, allow_pickle=False).tolist()
+    assert (
+        dataset.va_uid.dtype
+        == torch.LongTensor(np.load(va_uid, allow_pickle=False)).dtype
+    )
+    assert len(dataset.va_uid) == len(
+        torch.LongTensor(np.load(va_uid, allow_pickle=False))
+    )
+    assert (
+        dataset.va_x.dtype == torch.FloatTensor(np.load(va_x, allow_pickle=False)).dtype
+    )
+    assert len(dataset.va_x) == len(
+        torch.FloatTensor(np.load(va_x, allow_pickle=False))
+    )
     assert dataset.va_xcols == dataset.tr_xcols
-    assert dataset.tr_sample_count == len(torch.load(uid))
-    assert dataset.va_sample_count == len(torch.load(va_uid))
+    assert dataset.tr_sample_count == len(
+        torch.LongTensor(np.load(uid, allow_pickle=False))
+    )
+    assert dataset.va_sample_count == len(
+        torch.LongTensor(np.load(va_uid, allow_pickle=False))
+    )
 
 
 @pytest.mark.parametrize(
@@ -101,8 +123,8 @@ def test_dataset(client, uid, x, cols, va_uid, va_x):
             5,
             True,
             "vfl-bucket-test",
-            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.pt",
-            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-gradient-1.pt",
+            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.npy",
+            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
         )
     ],
 )
@@ -226,11 +248,17 @@ def index(request):
     if request.param is None:
         yield {"Uri": None, "Object": None}
     with tempfile.TemporaryDirectory() as tmpdirname:
-        sample_count = len(torch.load("../server/functions/init_server/tr_uid.pt"))
+        sample_count = len(
+            torch.FloatTensor(
+                np.load(
+                    "../server/functions/init_server/tr_uid.npy", allow_pickle=False
+                )
+            )
+        )
         index = torch.randperm(sample_count)
-        file_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.pt"
+        file_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.npy"
         local_path = f"{tmpdirname}/{file_name}"
-        torch.save(index, local_path)
+        np.save(local_path, index.numpy(), allow_pickle=False)
         if request.param == "local":
             yield {"Uri": local_path, "Object": index}
         elif request.param == "s3":
@@ -304,7 +332,7 @@ def sqs():
         "IsNextVaBatch": True,
         "EpochIndex": 3,
         "IsNextEpoch": True,
-        "ShuffledIndexPath": "s3://test-vfl/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.pt",
+        "ShuffledIndexPath": "s3://test-vfl/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.npy",
     }
     message_body = json.dumps(test_message)
     queue_url = client.get_queue_url(QueueName=name)["QueueUrl"]
