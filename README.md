@@ -31,7 +31,7 @@ The training workflow consists of three state machines, main, training and valid
 ![State machines](_static/img/State%20machines.png)
 
 ## Experiment
-Our experiment with [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adult) in [UCI machine learning repository](https://archive.ics.uci.edu/ml/index.php) shows the effectiveness of VFL. In the experiment, the number of clients varies between 2 and 4 and the clients are deployed in different AWS regions as shown below:
+Our experiment with [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adult) in UCI machine learning repository [[1](#uci-ml-repo)] shows the effectiveness of VFL. In the experiment, the number of clients varies between 2 and 4 and the clients are deployed in different AWS regions as shown below:
 
 |Client|Region|
 | :--- | :--- |
@@ -73,7 +73,7 @@ Before setting up server and clients, the sample data needs to be prepared for t
     python init_data.py
     ```
 
-For this experiment, [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adult) in [UCI machine learning repository](https://archive.ics.uci.edu/) is used.  The dataset consists of 14 features. For the VFL simulation, the features are divided into four subsets of features. Each subset of features is associated with a client while the server has only the label data.
+For this experiment, [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adult) in UCI machine learning repository [[1](#uci-ml-repo)] is used.  The dataset consists of 14 features. For the VFL simulation, the features are divided into four subsets of features. Each subset of features is associated with a client while the server has only the label data.
 
 ### Server and Client setup
 The server and clients can be set up by following the instructions below:
@@ -116,4 +116,4 @@ You can evaluate the model's accuracy once the training is completed.
 [Testing Model](test/README.md)
 
 # Dataset Reference
-- Dua, D. and Graff, C. (2019). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science.
+1. <span id="uci-ml-repo">Dua, D. and Graff, C. (2019). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science.</span>
