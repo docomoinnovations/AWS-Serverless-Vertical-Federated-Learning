@@ -56,9 +56,10 @@ def get_batch_count(dataset, batch_size):
 
 
 # Shuffled index
-def set_shuffled_index(dataset, task_name, bucket):
+def set_shuffled_index(dataset, task_name, bucket, prefix=""):
     sample_count = get_sample_count(dataset)
     shuffled_index_file_name = f"{task_name}-shuffled-index.npy"
+    key = f"{prefix}{shuffled_index_file_name}"
     shuffled_index = torch.randperm(sample_count)
     with tempfile.TemporaryDirectory() as tmpdirname:
         np.save(
@@ -70,9 +71,9 @@ def set_shuffled_index(dataset, task_name, bucket):
         s3.meta.client.upload_file(
             f"/{tmpdirname}/{shuffled_index_file_name}",
             bucket,
-            shuffled_index_file_name,
+            key,
         )
-    return f"s3://{bucket}/{shuffled_index_file_name}"
+    return f"s3://{bucket}/{key}"
 
 
 def lambda_handler(event, context):
@@ -97,7 +98,10 @@ def lambda_handler(event, context):
     batch_count = get_batch_count(dataset=f"{dir}/tr_uid.npy", batch_size=batch_size)
     va_batch_count = get_batch_count(dataset=f"{dir}/va_uid.npy", batch_size=batch_size)
     shuffled_index_path = set_shuffled_index(
-        dataset=f"{dir}/tr_uid.npy", task_name=task_name, bucket=s3_bucket
+        dataset=f"{dir}/tr_uid.npy",
+        task_name=task_name,
+        bucket=s3_bucket,
+        prefix="common/",
     )
     epoch_count = int(event["epoch_count"])
 

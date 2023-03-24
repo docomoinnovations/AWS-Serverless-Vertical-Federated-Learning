@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 import random
+import tempfile
 import boto3
 import json
+from urllib.parse import urlparse
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 
@@ -15,6 +17,15 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
+
+
+class S3Url:
+    def __init__(self, url) -> None:
+        self.url = url
+        parsed_url = urlparse(url, allow_fragments=False)
+        self.bucket = parsed_url.netloc
+        self.key = parsed_url.path.lstrip("/")
+        self.file_name = self.key.split("/")[-1]
 
 
 class DataSet:
@@ -30,6 +41,16 @@ class DataSet:
         self.uid = torch.LongTensor(np.load(uid, allow_pickle=False))
         self.va_label = torch.FloatTensor(np.load(va_label, allow_pickle=False))
         self.va_uid = torch.LongTensor(np.load(va_uid, allow_pickle=False))
+
+
+class ShuffledIndex:
+    def __init__(self, s3_url: S3Url):
+        self.s3_url = s3_url
+        s3_object = boto3.resource("s3").Object(s3_url.bucket, s3_url.key)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/{s3_url.file_name}"
+            s3_object.download_file(file_path)
+            self.index = torch.LongTensor(np.load(file_path, allow_pickle=False))
 
 
 class ServerModel(torch.nn.Module):
@@ -61,6 +82,7 @@ class TrainingSession:
         batch_index,
         batch_size,
         va_batch_index,
+        shuffled_index,
     ) -> None:
         self.task_name = task_name
         self.num_of_clients = num_of_clients
@@ -68,6 +90,7 @@ class TrainingSession:
         self.batch_index = batch_index
         self.batch_size = batch_size
         self.va_batch_index = va_batch_index
+        self.shuffled_index = shuffled_index.index
 
 
 class ServerTrainer:
@@ -80,6 +103,7 @@ class ServerTrainer:
         self.batch_index = training_session.batch_index
         self.batch_size = training_session.batch_size
         self.va_batch_index = training_session.va_batch_index
+        self.shuffled_index = training_session.shuffled_index
         self.s3_bucket = s3_bucket
         self.embeds = dict()
         self.gradients = dict()
@@ -95,14 +119,6 @@ class ServerTrainer:
 
         # Init criterion
         self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
-
-        # Init shuffled index
-        shuffled_index_path = self.__download_file_from_s3(
-            f"{self.task_name}-shuffled-index.npy"
-        )
-        self.shuffled_index = torch.LongTensor(
-            np.load(shuffled_index_path, allow_pickle=False)
-        )
 
         # Init tr_uid
         self.tr_uid = dataset.uid
@@ -311,6 +327,7 @@ def lambda_handler(event, context):
         batch_index=batch_index,
         batch_size=batch_size,
         va_batch_index=va_batch_index,
+        shuffled_index=ShuffledIndex(S3Url(shuffled_index_path)),
     )
     server_trainer = ServerTrainer(training_session=session, s3_bucket=s3_bucket)
 

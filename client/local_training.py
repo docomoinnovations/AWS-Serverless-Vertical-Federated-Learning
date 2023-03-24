@@ -140,11 +140,12 @@ class ShuffledIndex:
         elif uri.startswith("s3://"):
             bucket_name = uri.split("/")[2]
             key = "/".join(uri.split("/")[3:])
+            file_name = uri.split("/")[-1]
             bucket = boto3.resource("s3").Bucket(bucket_name)
             with tempfile.TemporaryDirectory() as tmpdirname:
-                bucket.download_file(key, f"{tmpdirname}/{key}")
+                bucket.download_file(key, f"{tmpdirname}/{file_name}")
                 self.index = torch.LongTensor(
-                    np.load(f"{tmpdirname}/{key}", allow_pickle=False)
+                    np.load(f"{tmpdirname}/{file_name}", allow_pickle=False)
                 )
         else:
             self.index = torch.LongTensor(np.load(uri, allow_pickle=False))
