@@ -268,10 +268,11 @@ def index(request):
                     for i in range(20)
                 ]
             )
+            key = f"common/{file_name}"
             bucket = boto3.resource("s3").Bucket(bucket_name)
             bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
-            bucket.upload_file(local_path, file_name)
-            yield {"Uri": f"s3://{bucket.name}/{file_name}", "Object": index}
+            bucket.upload_file(local_path, key)
+            yield {"Uri": f"s3://{bucket.name}/{key}", "Object": index}
 
             bucket.objects.all().delete()
             bucket.delete()

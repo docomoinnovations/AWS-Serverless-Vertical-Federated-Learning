@@ -120,12 +120,14 @@ def test_set_shuffled_index(bucket):
     task_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss"
     dataset = "functions/init_server/tr_uid.npy"
 
-    s3_url = set_shuffled_index(dataset=dataset, task_name=task_name, bucket=bucket)
-    assert s3_url == f"s3://{bucket}/{task_name}-shuffled-index.npy"
-
-    shuffled_index_obj = boto3.resource("s3").Object(
-        bucket, f"{task_name}-shuffled-index.npy"
+    prefix = "common/"
+    key = f"{prefix}{task_name}-shuffled-index.npy"
+    s3_url = set_shuffled_index(
+        dataset=dataset, task_name=task_name, bucket=bucket, prefix=prefix
     )
+    assert s3_url == f"s3://{bucket}/{key}"
+
+    shuffled_index_obj = boto3.resource("s3").Object(bucket, key)
     with tempfile.TemporaryDirectory() as tmpdirname:
         shuffled_index_obj.download_file(f"{tmpdirname}/shuffled-index.npy")
         shuffled_index = torch.LongTensor(
