@@ -8,16 +8,6 @@ from urllib.parse import urlparse
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 
-seed = 42  # Random Seed
-
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
 
 class S3Url:
     def __init__(self, url) -> None:
@@ -81,6 +71,17 @@ class Loss:
             s3_object.upload_file(file_path)
 
 
+seed = 42
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+
 class ServerModel(torch.nn.Module):
     def __init__(self, hidden_size, out_size):
         super(ServerModel, self).__init__()
@@ -99,6 +100,13 @@ class ServerModel(torch.nn.Module):
         h = F.relu(h)
         o = self.h2o(h)
         return o
+
+    def save(self, s3_object) -> S3Url:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/{s3_object.bucket_name}"
+            torch.save(self.state_dict(), file_path)
+            s3_object.upload_file(file_path)
+        return S3Url(f"s3://{s3_object.bucket_name}/{s3_object.key}")
 
 
 class TrainingSession:
@@ -124,7 +132,7 @@ class TrainingSession:
 
 
 class ServerTrainer:
-    def __init__(self, training_session, s3_bucket, dataset=None) -> None:
+    def __init__(self, training_session, s3_bucket, model, dataset=None) -> None:
         self.tmp_dir = "/tmp/"
         self.task_name = training_session.task_name
         self.num_of_clients = training_session.num_of_clients
@@ -161,15 +169,10 @@ class ServerTrainer:
         self.va_y = dataset.va_label
 
         # Init server model
-        self.server_model = ServerModel(4 * self.num_of_clients, 1)
-        if self.epoch_index != 0 or self.batch_index != 0:
-            server_model_file = self.__download_file_from_s3(
-                f"{self.task_name}-server-model.pt"
-            )
-            self.server_model.load_state_dict(torch.load(server_model_file))
+        self.model = model
 
         # Init optimizer
-        self.optimizer = torch.optim.Adam(self.server_model.parameters(), lr=0.01)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
         if self.epoch_index != 0 or self.batch_index != 0:
             optimizer_file = self.__download_file_from_s3(
                 f"{self.task_name}-optimizer.pt"
@@ -222,16 +225,8 @@ class ServerTrainer:
             embed_files_s3_path[client_id] = f"s3://{self.s3_bucket}/{file_name}"
         return embed_files_s3_path
 
-    def save_model(self, file_name=None) -> None:
-        file_name = (
-            f"{self.task_name}-server-model.pt" if file_name is None else file_name
-        )
-        model_file_path = self.tmp_dir + file_name
-        if file_name:
-            model_file_path = f"/tmp/{file_name}"
-        key = model_file_path.split("/")[-1]
-        torch.save(self.server_model.state_dict(), model_file_path)
-        self.__upload_file_to_s3(model_file_path, key)
+    def save_model(self, s3_object) -> S3Url:
+        return self.model.save(s3_object)
 
     def save_optimizer(self, file_name=None) -> None:
         file_name = f"{self.task_name}-optimizer.pt" if file_name is None else file_name
@@ -260,7 +255,7 @@ class ServerTrainer:
         tail = min(head + self.batch_size, tr_sample_count)
         si = self.shuffled_index[head:tail]
 
-        self.server_model.train()
+        self.model.train()
         batch_y = self.tr_y[si, :]
         self.optimizer.zero_grad()
         embed_tuple = ()
@@ -269,7 +264,7 @@ class ServerTrainer:
         embed = torch.cat(embed_tuple, 1)
         embed.requires_grad_(True)
 
-        pred_y = self.server_model(embed)
+        pred_y = self.model(embed)
         loss = self.criterion(pred_y, batch_y)
         loss.backward()
         self.optimizer.step()
@@ -287,14 +282,14 @@ class ServerTrainer:
         head = self.va_batch_index * self.batch_size
         tail = min(head + self.batch_size, va_sample_count)
 
-        self.server_model.eval()
+        self.model.eval()
         batch_y = self.va_y[head:tail, :]
         embed_tuple = ()
         for client_id in self.client_ids:
             embed_tuple = (*embed_tuple, self.embeds[client_id])
         embed = torch.cat(embed_tuple, 1)
 
-        pred_y = self.server_model(embed)
+        pred_y = self.model(embed)
         loss = self.criterion(pred_y, batch_y)
         self.loss.total_va_loss += loss.item()
         self.va_pred[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
@@ -331,10 +326,19 @@ def lambda_handler(event, context):
     task_name = input_items[0]["TaskName"]
     shuffled_index_path = input_items[0]["ShuffledIndexPath"]
 
+    # Initialize object stored on S3 bucket
+    s3_model_object = boto3.resource("s3").Object(
+        s3_bucket, f"server/{task_name}-server-model.pt"
+    )
+    s3_best_model_object = boto3.resource("s3").Object(
+        s3_bucket, f"model/{task_name}-server-model-best.pt"
+    )
+    s3_loss_object = boto3.resource("s3").Object(
+        s3_bucket, f"server/{task_name}-loss.json"
+    )
+
     # Loss
     loss = Loss()
-    loss_key = f"server/{task_name}-loss.json"
-    s3_loss_object = boto3.resource("s3").Object(s3_bucket, loss_key)
     if batch_index > 0:
         loss = Loss(s3_object=s3_loss_object)
 
@@ -349,13 +353,22 @@ def lambda_handler(event, context):
         shuffled_index=ShuffledIndex(S3Url(shuffled_index_path)),
         loss=loss,
     )
-    server_trainer = ServerTrainer(training_session=session, s3_bucket=s3_bucket)
+
+    model = ServerModel(4 * num_of_clients, 1)
+    if epoch_index != 0 or batch_index != 0:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            s3_model_file_name = s3_model_object.key.split("/")[-1]
+            s3_model_object.download_file(f"{tmpdirname}/{s3_model_file_name}")
+            model.load_state_dict(torch.load(f"{tmpdirname}/{s3_model_file_name}"))
+
+    server_trainer = ServerTrainer(
+        training_session=session, s3_bucket=s3_bucket, model=model
+    )
 
     # Save model and return
     if phase == "Save":
         # Save best model
-        best_model_name = f"{task_name}-server-model-best.pt"
-        server_trainer.save_model(file_name=best_model_name)
+        server_trainer.save_model(s3_best_model_object)
 
         # Generate response for the next Map step
         response = []
@@ -400,7 +413,7 @@ def lambda_handler(event, context):
         gradient_files = server_trainer.save_gradient()
 
         # Save model and optimizer
-        server_trainer.save_model()
+        server_trainer.save_model(s3_model_object)
         server_trainer.save_optimizer()
 
         # Generate response for the next Map step
