@@ -1,5 +1,6 @@
 import pytest
 import boto3
+import json
 import random
 import string
 import tempfile
@@ -11,8 +12,20 @@ from functions.server_training.server_training import (
     ServerTrainer,
     TrainingSession,
     DataSet,
+    Loss,
 )
 from functions.init_server.serverinit import set_shuffled_index
+
+
+def create_test_bucket():
+    bucket_name = "".join(
+        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
+    )
+
+    bucket = boto3.resource("s3").Bucket(bucket_name)
+    bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+
+    return bucket
 
 
 @pytest.mark.parametrize(
@@ -90,12 +103,7 @@ def test_init_dataset():
 
 @pytest.fixture
 def shuffled_index_url() -> S3Url:
-    bucket_name = "".join(
-        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
-    )
-
-    bucket = boto3.resource("s3").Bucket(bucket_name)
-    bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    bucket = create_test_bucket()
 
     shuffled_index_url = set_shuffled_index(
         "functions/init_server/tr_uid.npy",
@@ -126,13 +134,80 @@ def test_shuffled_index(shuffled_index_url: S3Url):
 
 
 @pytest.fixture
-def bucket_name() -> str:
-    bucket_name = "".join(
-        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
-    )
+def loss_object(request):
+    if request.param["LOSS"] is None:
+        yield None
 
-    bucket = boto3.resource("s3").Bucket(bucket_name)
-    bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    else:
+        bucket = create_test_bucket()
+        task_name = request.param["TASK_NAME"]
+        s3_key = request.param["S3_KEY"]
+        loss = request.param["LOSS"]
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/{task_name}-loss.json"
+            with open(file_path, "w") as f:
+                json.dump(loss, f)
+            boto3.resource("s3").Object(bucket.name, s3_key).upload_file(file_path)
+
+        yield boto3.resource("s3").Object(bucket.name, s3_key)
+
+        bucket.objects.all().delete()
+        bucket.delete()
+
+
+@pytest.mark.parametrize(
+    ("loss_object", "expected"),
+    [
+        (
+            {
+                "TASK_NAME": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+                "LOSS": None,
+                "S3_KEY": "common/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
+            },
+            {"total_tr_loss": 0, "total_va_loss": 0},
+        ),
+        (
+            {
+                "TASK_NAME": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+                "LOSS": {
+                    "total_tr_loss": 3.3729172945022583,
+                    "total_va_loss": 1.1351569890975952,
+                },
+                "S3_KEY": "common/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
+            },
+            {"total_tr_loss": 3.3729172945022583, "total_va_loss": 1.1351569890975952},
+        ),
+    ],
+    indirect=["loss_object"],
+)
+def test_loss(loss_object, expected):
+    loss = Loss(loss_object)
+    assert loss.total_tr_loss == expected["total_tr_loss"]
+    assert loss.total_va_loss == expected["total_va_loss"]
+
+    loss.total_tr_loss += 1
+    loss.total_va_loss += 0.5
+
+    new_object = loss_object
+
+    if new_object is None:
+        bucket = create_test_bucket()
+        new_object = boto3.resource("s3").Object(bucket.name, "common/new-loss.json")
+
+    loss.save(new_object)
+
+    new_loss = Loss(new_object)
+    assert new_loss.total_tr_loss == loss.total_tr_loss
+    assert new_loss.total_va_loss == loss.total_va_loss
+
+    if loss_object is None:
+        bucket.objects.all().delete()
+        bucket.delete()
+
+
+@pytest.fixture
+def bucket_name() -> str:
+    bucket = create_test_bucket()
 
     set_shuffled_index(
         "functions/init_server/tr_uid.npy",
@@ -149,12 +224,8 @@ def bucket_name() -> str:
 
 @pytest.fixture
 def shuffled_index() -> ShuffledIndex:
-    bucket_name = "".join(
-        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
-    )
+    bucket = create_test_bucket()
 
-    bucket = boto3.resource("s3").Bucket(bucket_name)
-    bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
     s3_url = set_shuffled_index(
         "functions/init_server/tr_uid.npy",
         "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
@@ -176,17 +247,9 @@ def shuffled_index() -> ShuffledIndex:
         "batch_index",
         "batch_size",
         "va_batch_index",
+        "loss",
     ),
-    [
-        (
-            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
-            4,
-            0,
-            0,
-            1024,
-            0,
-        )
-    ],
+    [("VFL-TAKS-YYYY-MM-DD-HH-mm-ss", 4, 0, 0, 1024, 0, Loss())],
 )
 def test_training_session(
     task_name,
@@ -196,6 +259,7 @@ def test_training_session(
     batch_size,
     va_batch_index,
     shuffled_index,
+    loss,
 ):
     session = TrainingSession(
         task_name=task_name,
@@ -205,6 +269,7 @@ def test_training_session(
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=shuffled_index,
+        loss=loss,
     )
     assert session.task_name == task_name
     assert session.num_of_clients == num_of_clients
@@ -213,6 +278,8 @@ def test_training_session(
     assert session.batch_size == batch_size
     assert session.va_batch_index == va_batch_index
     assert session.shuffled_index.tolist() == shuffled_index.index.tolist()
+    assert session.loss.total_tr_loss == loss.total_tr_loss
+    assert session.loss.total_va_loss == loss.total_va_loss
 
 
 @pytest.mark.parametrize(
@@ -223,17 +290,9 @@ def test_training_session(
         "batch_index",
         "batch_size",
         "va_batch_index",
+        "loss",
     ),
-    [
-        (
-            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
-            4,
-            0,
-            0,
-            1024,
-            0,
-        )
-    ],
+    [("VFL-TAKS-YYYY-MM-DD-HH-mm-ss", 4, 0, 0, 1024, 0, Loss())],
 )
 def test_init_server_trainer(
     task_name,
@@ -242,6 +301,7 @@ def test_init_server_trainer(
     batch_index,
     batch_size,
     va_batch_index,
+    loss,
     shuffled_index,
 ):
     dataset_dir = "functions/server_training"
@@ -259,6 +319,7 @@ def test_init_server_trainer(
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=shuffled_index,
+        loss=loss,
     )
 
     server_trainer = ServerTrainer(
@@ -282,3 +343,5 @@ def test_init_server_trainer(
         server_trainer.shuffled_index.tolist()
         == training_session.shuffled_index.tolist()
     )
+    assert server_trainer.loss.total_tr_loss == loss.total_tr_loss
+    assert server_trainer.loss.total_va_loss == loss.total_va_loss

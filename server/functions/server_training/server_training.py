@@ -53,6 +53,34 @@ class ShuffledIndex:
             self.index = torch.LongTensor(np.load(file_path, allow_pickle=False))
 
 
+class Loss:
+    def __init__(self, s3_object=None) -> None:
+        if s3_object is None:
+            self.total_tr_loss = 0
+            self.total_va_loss = 0
+        else:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                file_path = f"{tmpdirname}/loss.json"
+                s3_object.download_file(file_path)
+                with open(file_path, "r") as f:
+                    loss = json.load(f)
+                    self.total_tr_loss = loss["total_tr_loss"]
+                    self.total_va_loss = loss["total_va_loss"]
+
+    def save(self, s3_object):
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/loss.json"
+            with open(file_path, "w") as f:
+                json.dump(
+                    {
+                        "total_tr_loss": self.total_tr_loss,
+                        "total_va_loss": self.total_va_loss,
+                    },
+                    f,
+                )
+            s3_object.upload_file(file_path)
+
+
 class ServerModel(torch.nn.Module):
     def __init__(self, hidden_size, out_size):
         super(ServerModel, self).__init__()
@@ -83,6 +111,7 @@ class TrainingSession:
         batch_size,
         va_batch_index,
         shuffled_index,
+        loss,
     ) -> None:
         self.task_name = task_name
         self.num_of_clients = num_of_clients
@@ -91,6 +120,7 @@ class TrainingSession:
         self.batch_size = batch_size
         self.va_batch_index = va_batch_index
         self.shuffled_index = shuffled_index.index
+        self.loss = loss
 
 
 class ServerTrainer:
@@ -104,6 +134,7 @@ class ServerTrainer:
         self.batch_size = training_session.batch_size
         self.va_batch_index = training_session.va_batch_index
         self.shuffled_index = training_session.shuffled_index
+        self.loss = training_session.loss
         self.s3_bucket = s3_bucket
         self.embeds = dict()
         self.gradients = dict()
@@ -144,17 +175,6 @@ class ServerTrainer:
                 f"{self.task_name}-optimizer.pt"
             )
             self.optimizer.load_state_dict(torch.load(optimizer_file))
-
-        # Load total Loss
-        if self.batch_index == 0:
-            self.total_tr_loss = 0
-            self.total_va_loss = 0
-        else:
-            loss_file_path = self.__download_file_from_s3(f"{self.task_name}-loss.json")
-            with open(loss_file_path) as f:
-                loss = json.load(f)
-                self.total_tr_loss = loss["total_tr_loss"]
-                self.total_va_loss = loss["total_va_loss"]
 
         # Load pred and true for training
         self.tr_true = self.tr_y[self.shuffled_index, :]
@@ -219,16 +239,8 @@ class ServerTrainer:
         torch.save(self.optimizer.state_dict(), optimizer_path)
         self.__upload_file_to_s3(optimizer_path, file_name)
 
-    def save_loss(self, file_name=None) -> None:
-        file_name = f"{self.task_name}-loss.json" if file_name is None else file_name
-        loss_file = self.tmp_dir + file_name
-        loss = {
-            "total_tr_loss": self.total_tr_loss,
-            "total_va_loss": self.total_va_loss,
-        }
-        with open(loss_file, "w") as f:
-            json.dump(loss, f)
-        self.__upload_file_to_s3(loss_file, file_name)
+    def save_loss(self, s3_object) -> None:
+        self.loss.save(s3_object)
 
     def save_tr_pred(self, file_name=None) -> None:
         file_name = f"{self.task_name}-tr-pred.npy" if file_name is None else file_name
@@ -261,7 +273,7 @@ class ServerTrainer:
         loss = self.criterion(pred_y, batch_y)
         loss.backward()
         self.optimizer.step()
-        self.total_tr_loss += loss.item()
+        self.loss.total_tr_loss += loss.item()
 
         for i, client_id in enumerate(self.client_ids):
             e_head = i * 4
@@ -284,17 +296,17 @@ class ServerTrainer:
 
         pred_y = self.server_model(embed)
         loss = self.criterion(pred_y, batch_y)
-        self.total_va_loss += loss.item()
+        self.loss.total_va_loss += loss.item()
         self.va_pred[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
     def get_tr_loss(self) -> float:
-        return self.total_tr_loss / (self.batch_index + 1)
+        return self.loss.total_tr_loss / (self.batch_index + 1)
 
     def get_tr_auc(self) -> float:
         return roc_auc_score(self.tr_true, self.tr_pred)
 
     def get_va_loss(self) -> float:
-        return self.total_va_loss / (self.va_batch_index + 1)
+        return self.loss.total_va_loss / (self.va_batch_index + 1)
 
     def get_va_auc(self) -> float:
         return roc_auc_score(self.va_true, self.va_pred)
@@ -319,6 +331,13 @@ def lambda_handler(event, context):
     task_name = input_items[0]["TaskName"]
     shuffled_index_path = input_items[0]["ShuffledIndexPath"]
 
+    # Loss
+    loss = Loss()
+    loss_key = f"server/{task_name}-loss.json"
+    s3_loss_object = boto3.resource("s3").Object(s3_bucket, loss_key)
+    if batch_index > 0:
+        loss = Loss(s3_object=s3_loss_object)
+
     # Init Server Trainer
     session = TrainingSession(
         task_name=task_name,
@@ -328,6 +347,7 @@ def lambda_handler(event, context):
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=ShuffledIndex(S3Url(shuffled_index_path)),
+        loss=loss,
     )
     server_trainer = ServerTrainer(training_session=session, s3_bucket=s3_bucket)
 
@@ -374,7 +394,8 @@ def lambda_handler(event, context):
         server_trainer.train()
 
         # Save parameters
-        server_trainer.save_loss()
+        server_trainer.save_loss(s3_loss_object)
+
         server_trainer.save_tr_pred()
         gradient_files = server_trainer.save_gradient()
 
@@ -410,7 +431,7 @@ def lambda_handler(event, context):
         server_trainer.validate()
 
         # Save parameters
-        server_trainer.save_loss()
+        server_trainer.save_loss(s3_loss_object)
         server_trainer.save_va_pred()
 
         # Generate response for the next Map step
