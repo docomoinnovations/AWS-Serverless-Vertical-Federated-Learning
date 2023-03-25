@@ -346,11 +346,13 @@ def test_init_server_trainer(
         loss=loss,
     )
     model = ServerModel(4 * num_of_clients, 1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
     server_trainer = ServerTrainer(
         training_session=training_session,
         s3_bucket=bucket_name,
         model=model,
+        optimizer=optimizer,
         dataset=dataset,
     )
     assert server_trainer.task_name == training_session.task_name
@@ -374,3 +376,4 @@ def test_init_server_trainer(
     assert server_trainer.loss.total_tr_loss == loss.total_tr_loss
     assert server_trainer.loss.total_va_loss == loss.total_va_loss
     assert len(server_trainer.model.state_dict()) == len(model.state_dict())
+    assert len(server_trainer.optimizer.state_dict()) == len(optimizer.state_dict())
