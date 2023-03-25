@@ -10,6 +10,7 @@ from functions.server_training.server_training import (
     S3Url,
     ShuffledIndex,
     ServerTrainer,
+    ServerModel,
     TrainingSession,
     DataSet,
     Loss,
@@ -131,6 +132,29 @@ def test_shuffled_index(shuffled_index_url: S3Url):
         )
         assert shuffled_index.s3_url == shuffled_index_url
         assert shuffled_index.index.tolist() == donwloaded_shuffled_index.tolist()
+
+
+@pytest.fixture
+def model_bucket():
+    bucket = create_test_bucket()
+    yield bucket
+
+    bucket.objects.all().delete()
+    bucket.delete()
+
+
+def test_server_model(model_bucket):
+    model = ServerModel(16, 1)
+    s3_object = boto3.resource("s3").Object(
+        model_bucket.name, f"server/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-server-model.pt"
+    )
+    s3_url = model.save(s3_object)
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/{s3_url.file_name}"
+        s3_object.download_file(file_path)
+        saved_model = ServerModel(16, 1)
+        saved_model.load_state_dict(torch.load(file_path))
+        assert len(model.state_dict()) == len(saved_model.state_dict())
 
 
 @pytest.fixture
@@ -321,9 +345,13 @@ def test_init_server_trainer(
         shuffled_index=shuffled_index,
         loss=loss,
     )
+    model = ServerModel(4 * num_of_clients, 1)
 
     server_trainer = ServerTrainer(
-        training_session=training_session, s3_bucket=bucket_name, dataset=dataset
+        training_session=training_session,
+        s3_bucket=bucket_name,
+        model=model,
+        dataset=dataset,
     )
     assert server_trainer.task_name == training_session.task_name
     assert server_trainer.num_of_clients == training_session.num_of_clients
@@ -345,3 +373,4 @@ def test_init_server_trainer(
     )
     assert server_trainer.loss.total_tr_loss == loss.total_tr_loss
     assert server_trainer.loss.total_va_loss == loss.total_va_loss
+    assert len(server_trainer.model.state_dict()) == len(model.state_dict())
