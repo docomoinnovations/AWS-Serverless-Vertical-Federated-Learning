@@ -271,9 +271,23 @@ def shuffled_index() -> ShuffledIndex:
         "batch_index",
         "batch_size",
         "va_batch_index",
+        "tr_pred",
+        "va_pred",
         "loss",
     ),
-    [("VFL-TAKS-YYYY-MM-DD-HH-mm-ss", 4, 0, 0, 1024, 0, Loss())],
+    [
+        (
+            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+            4,
+            0,
+            0,
+            1024,
+            0,
+            np.zeros([29304, 1]),
+            np.zeros([3257, 1]),
+            Loss(),
+        ),
+    ],
 )
 def test_training_session(
     task_name,
@@ -283,6 +297,8 @@ def test_training_session(
     batch_size,
     va_batch_index,
     shuffled_index,
+    tr_pred,
+    va_pred,
     loss,
 ):
     session = TrainingSession(
@@ -293,6 +309,8 @@ def test_training_session(
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=shuffled_index,
+        tr_pred=tr_pred,
+        va_pred=va_pred,
         loss=loss,
     )
     assert session.task_name == task_name
@@ -302,6 +320,8 @@ def test_training_session(
     assert session.batch_size == batch_size
     assert session.va_batch_index == va_batch_index
     assert session.shuffled_index.tolist() == shuffled_index.index.tolist()
+    assert np.all(session.tr_pred == tr_pred)
+    assert np.all(session.va_pred == va_pred)
     assert session.loss.total_tr_loss == loss.total_tr_loss
     assert session.loss.total_va_loss == loss.total_va_loss
 
@@ -314,9 +334,23 @@ def test_training_session(
         "batch_index",
         "batch_size",
         "va_batch_index",
+        "tr_pred",
+        "va_pred",
         "loss",
     ),
-    [("VFL-TAKS-YYYY-MM-DD-HH-mm-ss", 4, 0, 0, 1024, 0, Loss())],
+    [
+        (
+            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+            4,
+            0,
+            0,
+            1024,
+            0,
+            np.zeros([29304, 1]),
+            np.zeros([3257, 1]),
+            Loss(),
+        )
+    ],
 )
 def test_init_server_trainer(
     task_name,
@@ -325,6 +359,8 @@ def test_init_server_trainer(
     batch_index,
     batch_size,
     va_batch_index,
+    tr_pred,
+    va_pred,
     loss,
     shuffled_index,
 ):
@@ -343,6 +379,8 @@ def test_init_server_trainer(
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=shuffled_index,
+        tr_pred=tr_pred,
+        va_pred=va_pred,
         loss=loss,
     )
     model = ServerModel(4 * num_of_clients, 1)
@@ -373,6 +411,8 @@ def test_init_server_trainer(
         server_trainer.shuffled_index.tolist()
         == training_session.shuffled_index.tolist()
     )
+    assert np.all(server_trainer.tr_pred == tr_pred)
+    assert np.all(server_trainer.va_pred == va_pred)
     assert server_trainer.loss.total_tr_loss == loss.total_tr_loss
     assert server_trainer.loss.total_va_loss == loss.total_va_loss
     assert len(server_trainer.model.state_dict()) == len(model.state_dict())
