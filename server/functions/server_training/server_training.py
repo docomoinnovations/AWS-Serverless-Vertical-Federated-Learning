@@ -26,7 +26,6 @@ class DataSet:
         va_label="va_y.npy",
         va_uid="va_uid.npy",
     ) -> None:
-        label
         self.label = torch.FloatTensor(np.load(label, allow_pickle=False))
         self.uid = torch.LongTensor(np.load(uid, allow_pickle=False))
         self.va_label = torch.FloatTensor(np.load(va_label, allow_pickle=False))
@@ -119,6 +118,8 @@ class TrainingSession:
         batch_size,
         va_batch_index,
         shuffled_index,
+        tr_pred,
+        va_pred,
         loss,
     ) -> None:
         self.task_name = task_name
@@ -128,6 +129,8 @@ class TrainingSession:
         self.batch_size = batch_size
         self.va_batch_index = va_batch_index
         self.shuffled_index = shuffled_index.index
+        self.tr_pred = tr_pred
+        self.va_pred = va_pred
         self.loss = loss
 
 
@@ -138,7 +141,7 @@ class ServerTrainer:
         s3_bucket: str,
         model: ServerModel,
         optimizer: torch.optim.Adam,
-        dataset=None,
+        dataset: DataSet,
     ) -> None:
         self.tmp_dir = "/tmp/"
         self.task_name = training_session.task_name
@@ -154,35 +157,20 @@ class ServerTrainer:
         self.embeds = dict()
         self.gradients = dict()
 
-        if dataset is None:
-            dataset = DataSet()
-
         self.tr_uid = dataset.uid
         self.tr_y = dataset.label
         self.va_uid = dataset.va_uid
         self.va_y = dataset.va_label
+        self.tr_true = self.tr_y[self.shuffled_index, :]
+        self.va_true = self.va_y
+        self.tr_pred = training_session.tr_pred
+        self.va_pred = training_session.va_pred
 
         self.pos_weight = (self.tr_y.shape[0] - self.tr_y.sum()) / self.tr_y.sum()
         self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
 
         self.model = model
         self.optimizer = optimizer
-
-        # Load pred and true for training
-        self.tr_true = self.tr_y[self.shuffled_index, :]
-        if self.batch_index == 0:
-            self.tr_pred = np.zeros(self.tr_y.shape)
-        else:
-            tr_pred_file = self.__download_file_from_s3(f"{self.task_name}-tr-pred.npy")
-            self.tr_pred = np.load(tr_pred_file, allow_pickle=False)
-
-        # Load pred and true for validation
-        self.va_true = self.va_y
-        if self.va_batch_index == 0:
-            self.va_pred = np.zeros(self.va_y.shape)
-        else:
-            va_pred_file = self.__download_file_from_s3(f"{self.task_name}-va-pred.npy")
-            self.va_pred = np.load(va_pred_file, allow_pickle=False)
 
     def __download_file_from_s3(self, s3_key) -> str:
         file_name = s3_key.split("/")[-1]
@@ -227,17 +215,17 @@ class ServerTrainer:
     def save_loss(self, s3_object) -> None:
         self.loss.save(s3_object)
 
-    def save_tr_pred(self, file_name=None) -> None:
-        file_name = f"{self.task_name}-tr-pred.npy" if file_name is None else file_name
-        local_file_path = self.tmp_dir + file_name
-        np.save(local_file_path, self.tr_pred, allow_pickle=False)
-        self.__upload_file_to_s3(local_file_path, file_name)
+    def save_tr_pred(self, s3_object) -> None:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/tr-pred.npy"
+            np.save(file_path, self.tr_pred, allow_pickle=False)
+            s3_object.upload_file(file_path)
 
-    def save_va_pred(self, file_name=None) -> None:
-        file_name = f"{self.task_name}-va-pred.npy" if file_name is None else file_name
-        local_file_path = self.tmp_dir + file_name
-        np.save(local_file_path, self.va_pred, allow_pickle=False)
-        self.__upload_file_to_s3(local_file_path, file_name)
+    def save_va_pred(self, s3_object) -> None:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/va-pred.npy"
+            np.save(file_path, self.va_pred, allow_pickle=False)
+            s3_object.upload_file(file_path)
 
     def train(self) -> None:
         tr_sample_count = len(self.tr_uid)
@@ -323,16 +311,35 @@ def lambda_handler(event, context):
     s3_optimizer_object = boto3.resource("s3").Object(
         s3_bucket, f"server/{task_name}-optimizer.pt"
     )
-    s3_best_model_object = boto3.resource("s3").Object(
-        s3_bucket, f"model/{task_name}-server-model-best.pt"
+    s3_tr_pred_object = boto3.resource("s3").Object(
+        s3_bucket, f"server/{task_name}-tr-pred.npy"
+    )
+    s3_va_pred_object = boto3.resource("s3").Object(
+        s3_bucket, f"server/{task_name}-va-pred.npy"
     )
     s3_loss_object = boto3.resource("s3").Object(
         s3_bucket, f"server/{task_name}-loss.json"
     )
+    s3_best_model_object = boto3.resource("s3").Object(
+        s3_bucket, f"model/{task_name}-server-model-best.pt"
+    )
 
+    dataset = DataSet()
+
+    tr_pred = np.zeros(dataset.label.shape)
+    va_pred = np.zeros(dataset.va_label.shape)
     loss = Loss()
+
     if batch_index > 0:
         loss = Loss(s3_object=s3_loss_object)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            s3_tr_pred_object.download_file(f"{tmpdirname}/tr-pred.npy")
+            tr_pred = np.load(f"{tmpdirname}/tr-pred.npy", allow_pickle=False)
+
+    if va_batch_index > 0:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            s3_va_pred_object.download_file(f"{tmpdirname}/va-pred.npy")
+            va_pred = np.load(f"{tmpdirname}/va-pred.npy", allow_pickle=False)
 
     session = TrainingSession(
         task_name=task_name,
@@ -342,6 +349,8 @@ def lambda_handler(event, context):
         batch_size=batch_size,
         va_batch_index=va_batch_index,
         shuffled_index=ShuffledIndex(S3Url(shuffled_index_path)),
+        tr_pred=tr_pred,
+        va_pred=va_pred,
         loss=loss,
     )
 
@@ -364,6 +373,7 @@ def lambda_handler(event, context):
         s3_bucket=s3_bucket,
         model=model,
         optimizer=optimizer,
+        dataset=dataset,
     )
 
     # Save model and return
@@ -410,7 +420,7 @@ def lambda_handler(event, context):
         # Save parameters
         server_trainer.save_loss(s3_loss_object)
 
-        server_trainer.save_tr_pred()
+        server_trainer.save_tr_pred(s3_object=s3_tr_pred_object)
         gradient_files = server_trainer.save_gradient()
 
         # Save model and optimizer
@@ -446,7 +456,7 @@ def lambda_handler(event, context):
 
         # Save parameters
         server_trainer.save_loss(s3_loss_object)
-        server_trainer.save_va_pred()
+        server_trainer.save_va_pred(s3_object=s3_va_pred_object)
 
         # Generate response for the next Map step
         response = []
