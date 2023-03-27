@@ -159,24 +159,21 @@ def test_server_model(model_bucket):
 
 @pytest.fixture
 def loss_object(request):
-    if request.param["LOSS"] is None:
-        yield None
-
-    else:
-        bucket = create_test_bucket()
-        task_name = request.param["TASK_NAME"]
-        s3_key = request.param["S3_KEY"]
-        loss = request.param["LOSS"]
+    bucket = create_test_bucket()
+    task_name = request.param["TASK_NAME"]
+    s3_key = request.param["S3_KEY"]
+    loss = request.param["LOSS"]
+    if loss is not None:
         with tempfile.TemporaryDirectory() as tmpdirname:
             file_path = f"{tmpdirname}/{task_name}-loss.json"
             with open(file_path, "w") as f:
                 json.dump(loss, f)
             boto3.resource("s3").Object(bucket.name, s3_key).upload_file(file_path)
 
-        yield boto3.resource("s3").Object(bucket.name, s3_key)
+    yield boto3.resource("s3").Object(bucket.name, s3_key)
 
-        bucket.objects.all().delete()
-        bucket.delete()
+    bucket.objects.all().delete()
+    bucket.delete()
 
 
 @pytest.mark.parametrize(
@@ -197,7 +194,7 @@ def loss_object(request):
                     "total_tr_loss": 3.3729172945022583,
                     "total_va_loss": 1.1351569890975952,
                 },
-                "S3_KEY": "common/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
+                "S3_KEY": "server/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
             },
             {"total_tr_loss": 3.3729172945022583, "total_va_loss": 1.1351569890975952},
         ),
@@ -206,27 +203,23 @@ def loss_object(request):
 )
 def test_loss(loss_object, expected):
     loss = Loss(loss_object)
+    assert loss.total_tr_loss == 0
+    assert loss.total_va_loss == 0
+
+    loss.load()
     assert loss.total_tr_loss == expected["total_tr_loss"]
     assert loss.total_va_loss == expected["total_va_loss"]
 
     loss.total_tr_loss += 1
     loss.total_va_loss += 0.5
 
-    new_object = loss_object
+    new_loss_object = loss_object
 
-    if new_object is None:
-        bucket = create_test_bucket()
-        new_object = boto3.resource("s3").Object(bucket.name, "common/new-loss.json")
-
-    loss.save(new_object)
-
-    new_loss = Loss(new_object)
+    loss.save()
+    new_loss = Loss(new_loss_object)
+    new_loss.load()
     assert new_loss.total_tr_loss == loss.total_tr_loss
     assert new_loss.total_va_loss == loss.total_va_loss
-
-    if loss_object is None:
-        bucket.objects.all().delete()
-        bucket.delete()
 
 
 @pytest.fixture
