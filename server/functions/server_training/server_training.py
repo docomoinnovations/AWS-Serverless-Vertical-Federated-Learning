@@ -44,19 +44,30 @@ class ShuffledIndex:
 
 class Loss:
     def __init__(self, s3_object=None) -> None:
-        if s3_object is None:
-            self.total_tr_loss = 0
-            self.total_va_loss = 0
-        else:
-            with tempfile.TemporaryDirectory() as tmpdirname:
-                file_path = f"{tmpdirname}/loss.json"
-                s3_object.download_file(file_path)
-                with open(file_path, "r") as f:
-                    loss = json.load(f)
-                    self.total_tr_loss = loss["total_tr_loss"]
-                    self.total_va_loss = loss["total_va_loss"]
+        self.total_tr_loss = 0
+        self.total_va_loss = 0
+        self.s3_object = s3_object
 
-    def save(self, s3_object):
+    def load(self):
+        if self.s3_object is None:
+            return
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/loss.json"
+            try:
+                self.s3_object.download_file(file_path)
+            except Exception as e:
+                print(e)
+                return
+            with open(file_path, "r") as f:
+                loss = json.load(f)
+                self.total_tr_loss = loss["total_tr_loss"]
+                self.total_va_loss = loss["total_va_loss"]
+
+    def save(self):
+        if self.s3_object is None:
+            return
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             file_path = f"{tmpdirname}/loss.json"
             with open(file_path, "w") as f:
@@ -67,7 +78,10 @@ class Loss:
                     },
                     f,
                 )
-            s3_object.upload_file(file_path)
+            try:
+                self.s3_object.upload_file(file_path)
+            except Exception as e:
+                print(e)
 
 
 seed = 42
@@ -212,8 +226,8 @@ class ServerTrainer:
             s3_object.upload_file(file_path)
         return S3Url(f"s3://{s3_object.bucket_name}/{s3_object.key}")
 
-    def save_loss(self, s3_object) -> None:
-        self.loss.save(s3_object)
+    def save_loss(self) -> None:
+        self.loss.save()
 
     def save_tr_pred(self, s3_object) -> None:
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -328,10 +342,10 @@ def lambda_handler(event, context):
 
     tr_pred = np.zeros(dataset.label.shape)
     va_pred = np.zeros(dataset.va_label.shape)
-    loss = Loss()
+    loss = Loss(s3_object=s3_loss_object)
 
     if batch_index > 0:
-        loss = Loss(s3_object=s3_loss_object)
+        loss.load()
         with tempfile.TemporaryDirectory() as tmpdirname:
             s3_tr_pred_object.download_file(f"{tmpdirname}/tr-pred.npy")
             tr_pred = np.load(f"{tmpdirname}/tr-pred.npy", allow_pickle=False)
@@ -418,7 +432,7 @@ def lambda_handler(event, context):
         server_trainer.train()
 
         # Save parameters
-        server_trainer.save_loss(s3_loss_object)
+        server_trainer.save_loss()
 
         server_trainer.save_tr_pred(s3_object=s3_tr_pred_object)
         gradient_files = server_trainer.save_gradient()
@@ -455,7 +469,7 @@ def lambda_handler(event, context):
         server_trainer.validate()
 
         # Save parameters
-        server_trainer.save_loss(s3_loss_object)
+        server_trainer.save_loss()
         server_trainer.save_va_pred(s3_object=s3_va_pred_object)
 
         # Generate response for the next Map step
