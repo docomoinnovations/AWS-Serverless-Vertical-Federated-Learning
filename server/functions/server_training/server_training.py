@@ -42,6 +42,30 @@ class ShuffledIndex:
             self.index = torch.LongTensor(np.load(file_path, allow_pickle=False))
 
 
+class Prediction:
+    def __init__(self, shape, s3_object) -> None:
+        self.shape = shape
+        self.s3_object = s3_object
+        self.value = np.zeros(shape=shape)
+
+    def load(self):
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/prediction.npy"
+            self.s3_object.download_file(file_path)
+            value = np.load(file=file_path, allow_pickle=False)
+            if value.shape != self.shape:
+                print(
+                    f"The shape of prediction is unexpected: expected({self.shape}), actual({value.shape})"
+                )
+            self.value = np.load(file=file_path, allow_pickle=False)
+
+    def save(self):
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/prediction.npy"
+            np.save(file_path, self.value, allow_pickle=False)
+            self.s3_object.upload_file(file_path)
+
+
 class Loss:
     def __init__(self, s3_object=None) -> None:
         self.total_tr_loss = 0
@@ -229,17 +253,11 @@ class ServerTrainer:
     def save_loss(self) -> None:
         self.loss.save()
 
-    def save_tr_pred(self, s3_object) -> None:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/tr-pred.npy"
-            np.save(file_path, self.tr_pred, allow_pickle=False)
-            s3_object.upload_file(file_path)
+    def save_tr_pred(self) -> None:
+        self.tr_pred.save()
 
-    def save_va_pred(self, s3_object) -> None:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/va-pred.npy"
-            np.save(file_path, self.va_pred, allow_pickle=False)
-            s3_object.upload_file(file_path)
+    def save_va_pred(self) -> None:
+        self.va_pred.save()
 
     def train(self) -> None:
         tr_sample_count = len(self.tr_uid)
@@ -267,7 +285,7 @@ class ServerTrainer:
             e_tail = (i + 1) * 4
             self.gradients[client_id] = embed.grad[:, e_head:e_tail].cpu()
 
-        self.tr_pred[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
+        self.tr_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
     def validate(self) -> None:
         va_sample_count = len(self.va_uid)
@@ -284,19 +302,19 @@ class ServerTrainer:
         pred_y = self.model(embed)
         loss = self.criterion(pred_y, batch_y)
         self.loss.total_va_loss += loss.item()
-        self.va_pred[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
+        self.va_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
     def get_tr_loss(self) -> float:
         return self.loss.total_tr_loss / (self.batch_index + 1)
 
     def get_tr_auc(self) -> float:
-        return roc_auc_score(self.tr_true, self.tr_pred)
+        return roc_auc_score(self.tr_true, self.tr_pred.value)
 
     def get_va_loss(self) -> float:
         return self.loss.total_va_loss / (self.va_batch_index + 1)
 
     def get_va_auc(self) -> float:
-        return roc_auc_score(self.va_true, self.va_pred)
+        return roc_auc_score(self.va_true, self.va_pred.value)
 
 
 def lambda_handler(event, context):
@@ -340,20 +358,22 @@ def lambda_handler(event, context):
 
     dataset = DataSet()
 
-    tr_pred = np.zeros(dataset.label.shape)
-    va_pred = np.zeros(dataset.va_label.shape)
+    tr_pred = Prediction(
+        shape=dataset.label.shape,
+        s3_object=s3_tr_pred_object,
+    )
+    va_pred = Prediction(
+        shape=dataset.va_label.shape,
+        s3_object=s3_va_pred_object,
+    )
     loss = Loss(s3_object=s3_loss_object)
 
     if batch_index > 0:
         loss.load()
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            s3_tr_pred_object.download_file(f"{tmpdirname}/tr-pred.npy")
-            tr_pred = np.load(f"{tmpdirname}/tr-pred.npy", allow_pickle=False)
+        tr_pred.load()
 
     if va_batch_index > 0:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            s3_va_pred_object.download_file(f"{tmpdirname}/va-pred.npy")
-            va_pred = np.load(f"{tmpdirname}/va-pred.npy", allow_pickle=False)
+        va_pred.load()
 
     session = TrainingSession(
         task_name=task_name,
@@ -434,7 +454,7 @@ def lambda_handler(event, context):
         # Save parameters
         server_trainer.save_loss()
 
-        server_trainer.save_tr_pred(s3_object=s3_tr_pred_object)
+        server_trainer.save_tr_pred()
         gradient_files = server_trainer.save_gradient()
 
         # Save model and optimizer
@@ -470,7 +490,7 @@ def lambda_handler(event, context):
 
         # Save parameters
         server_trainer.save_loss()
-        server_trainer.save_va_pred(s3_object=s3_va_pred_object)
+        server_trainer.save_va_pred()
 
         # Generate response for the next Map step
         response = []
