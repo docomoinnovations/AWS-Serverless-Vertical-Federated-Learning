@@ -263,7 +263,7 @@ class ClientTrainer:
         np.save(file_name, self.embed.detach().cpu().numpy(), allow_pickle=False)
         key = file_name.split("/")[-1]
         self.s3.meta.client.upload_file(file_name, bucket, key)
-        return f"s3://{bucket}/{file_name}"
+        return f"s3://{bucket}/{key}"
 
     def __set_gradient(self, s3_uri: str) -> None:
         bucket = s3_uri.split("/")[2]

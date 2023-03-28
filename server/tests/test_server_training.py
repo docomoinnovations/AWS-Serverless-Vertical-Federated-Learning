@@ -13,6 +13,7 @@ from functions.server_training.server_training import (
     ServerModel,
     TrainingSession,
     DataSet,
+    Embed,
     Loss,
     Prediction,
 )
@@ -169,7 +170,7 @@ def model_bucket():
 def test_server_model(model_bucket):
     model = ServerModel(16, 1)
     s3_object = boto3.resource("s3").Object(
-        model_bucket.name, f"server/VFL-TASK-YYYY-MM-DD-HH-mm-ss-server-model.pt"
+        model_bucket.name, "server/VFL-TASK-YYYY-MM-DD-HH-mm-ss-server-model.pt"
     )
     s3_url = model.save(s3_object)
     with tempfile.TemporaryDirectory() as tmpdirname:
@@ -178,6 +179,54 @@ def test_server_model(model_bucket):
         saved_model = ServerModel(16, 1)
         saved_model.load_state_dict(torch.load(file_path))
         assert len(model.state_dict()) == len(saved_model.state_dict())
+
+
+@pytest.fixture
+def embed_test_params(request):
+    shape = request.param["shape"]
+    key = request.param["key"]
+    embed_num = np.random.rand(shape[0], shape[1])
+    embed = torch.FloatTensor(embed_num)
+
+    bucket = create_test_bucket()
+    s3_object = boto3.resource("s3").Object(
+        bucket.name,
+        key,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/embed.npy"
+        np.save(file=file_path, arr=embed_num, allow_pickle=False)
+        s3_object.upload_file(file_path)
+
+    yield {
+        "s3_url": S3Url(f"s3://{bucket.name}/{key}"),
+        "expected": embed,
+    }
+
+    bucket.objects.all().delete()
+    bucket.delete()
+
+
+@pytest.mark.parametrize(
+    "embed_test_params",
+    [
+        {
+            "shape": (9304, 4),
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-tr-embed-1.npy",
+        },
+        {
+            "shape": (3257, 4),
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-va-embed-2.npy",
+        },
+    ],
+    indirect=True,
+)
+def test_embed(embed_test_params):
+    s3_url = embed_test_params["s3_url"]
+    expected = embed_test_params["expected"]
+    embed = Embed(s3_url)
+    assert embed.value.tolist() == expected.tolist()
 
 
 @pytest.fixture

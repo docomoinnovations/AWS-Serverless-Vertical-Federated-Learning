@@ -66,6 +66,22 @@ class Prediction:
             self.s3_object.upload_file(file_path)
 
 
+class Embed:
+    def __init__(self, url: S3Url) -> None:
+        self.url = url
+
+        s3_object = boto3.resource("s3").Object(url.bucket, url.key)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/embed.npy"
+            s3_object.download_file(file_path)
+            self.value = torch.FloatTensor(
+                np.load(
+                    file=file_path,
+                    allow_pickle=False,
+                )
+            )
+
+
 class Loss:
     def __init__(self, s3_object=None) -> None:
         self.total_tr_loss = 0
@@ -210,25 +226,13 @@ class ServerTrainer:
         self.model = model
         self.optimizer = optimizer
 
-    def __download_file_from_s3(self, s3_key) -> str:
-        file_name = s3_key.split("/")[-1]
-        download_path = self.tmp_dir + file_name
-        s3 = boto3.resource("s3")
-        s3.meta.client.download_file(self.s3_bucket, s3_key, download_path)
-        return download_path
-
     def __upload_file_to_s3(self, file_path, s3_key) -> bool:
         client = boto3.client("s3")
         client.upload_file(file_path, self.s3_bucket, s3_key)
         return True
 
-    def set_embed(self, client_id, s3_key) -> None:
-        file_name = s3_key.split("/")[-1]
-        file_path = f"/tmp/{file_name}"
-        self.__download_file_from_s3(file_name)
-        self.embeds[client_id] = torch.FloatTensor(
-            np.load(file_path, allow_pickle=False)
-        )
+    def set_embed(self, client_id: str, embed: Embed) -> None:
+        self.embeds[client_id] = embed
 
     def save_gradient(self, file_name_prefix=None) -> dict:
         embed_files_s3_path = dict()
@@ -270,7 +274,7 @@ class ServerTrainer:
         self.optimizer.zero_grad()
         embed_tuple = ()
         for client_id in self.client_ids:
-            embed_tuple = (*embed_tuple, self.embeds[client_id])
+            embed_tuple = (*embed_tuple, self.embeds[client_id].value)
         embed = torch.cat(embed_tuple, 1)
         embed.requires_grad_(True)
 
@@ -296,7 +300,7 @@ class ServerTrainer:
         batch_y = self.va_y[head:tail, :]
         embed_tuple = ()
         for client_id in self.client_ids:
-            embed_tuple = (*embed_tuple, self.embeds[client_id])
+            embed_tuple = (*embed_tuple, self.embeds[client_id].value)
         embed = torch.cat(embed_tuple, 1)
 
         pred_y = self.model(embed)
@@ -441,8 +445,12 @@ def lambda_handler(event, context):
     # Set embed from clients
     for input_item in input_items:
         client_id = input_item["MemberId"]
-        embed_file = input_item["EmbedFile"].split("/")[-1]
-        server_trainer.set_embed(client_id, embed_file)
+        url = S3Url(input_item["EmbedFile"])
+        embed = Embed(url=url)
+        server_trainer.set_embed(
+            client_id=client_id,
+            embed=embed,
+        )
 
     response = None
 
