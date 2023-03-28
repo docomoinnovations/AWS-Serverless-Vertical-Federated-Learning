@@ -14,6 +14,7 @@ from functions.server_training.server_training import (
     TrainingSession,
     DataSet,
     Loss,
+    Prediction,
 )
 from functions.init_server.serverinit import set_shuffled_index
 
@@ -24,7 +25,9 @@ def create_test_bucket():
     )
 
     bucket = boto3.resource("s3").Bucket(bucket_name)
-    bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    bucket.create(
+        CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
+    )
 
     return bucket
 
@@ -71,7 +74,12 @@ def test_init_dataset():
         ).dtype
     )
     assert len(dataset.label) == len(
-        torch.FloatTensor(np.load(f"{dataset_dir}/tr_y.npy", allow_pickle=False))
+        torch.FloatTensor(
+            np.load(
+                f"{dataset_dir}/tr_y.npy",
+                allow_pickle=False,
+            )
+        )
     )
     assert (
         dataset.uid.dtype
@@ -80,7 +88,12 @@ def test_init_dataset():
         ).dtype
     )
     assert len(dataset.uid) == len(
-        torch.LongTensor(np.load(f"{dataset_dir}/tr_uid.npy", allow_pickle=False))
+        torch.LongTensor(
+            np.load(
+                f"{dataset_dir}/tr_uid.npy",
+                allow_pickle=False,
+            )
+        )
     )
     assert (
         dataset.va_label.dtype
@@ -89,7 +102,12 @@ def test_init_dataset():
         ).dtype
     )
     assert len(dataset.va_label) == len(
-        torch.FloatTensor(np.load(f"{dataset_dir}/va_y.npy", allow_pickle=False))
+        torch.FloatTensor(
+            np.load(
+                f"{dataset_dir}/va_y.npy",
+                allow_pickle=False,
+            )
+        )
     )
     assert (
         dataset.va_uid.dtype
@@ -98,7 +116,12 @@ def test_init_dataset():
         ).dtype
     )
     assert len(dataset.va_uid) == len(
-        torch.LongTensor(np.load(f"{dataset_dir}/va_uid.npy", allow_pickle=False))
+        torch.LongTensor(
+            np.load(
+                f"{dataset_dir}/va_uid.npy",
+                allow_pickle=False,
+            )
+        )
     )
 
 
@@ -108,7 +131,7 @@ def shuffled_index_url() -> S3Url:
 
     shuffled_index_url = set_shuffled_index(
         "functions/init_server/tr_uid.npy",
-        "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+        "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
         bucket.name,
         prefix="common/",
     )
@@ -146,7 +169,7 @@ def model_bucket():
 def test_server_model(model_bucket):
     model = ServerModel(16, 1)
     s3_object = boto3.resource("s3").Object(
-        model_bucket.name, f"server/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-server-model.pt"
+        model_bucket.name, f"server/VFL-TASK-YYYY-MM-DD-HH-mm-ss-server-model.pt"
     )
     s3_url = model.save(s3_object)
     with tempfile.TemporaryDirectory() as tmpdirname:
@@ -181,20 +204,20 @@ def loss_object(request):
     [
         (
             {
-                "TASK_NAME": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+                "TASK_NAME": "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
                 "LOSS": None,
-                "S3_KEY": "common/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
+                "S3_KEY": "common/VFL-TASK-YYYY-MM-DD-HH-mm-ss-loss.json",
             },
             {"total_tr_loss": 0, "total_va_loss": 0},
         ),
         (
             {
-                "TASK_NAME": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+                "TASK_NAME": "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
                 "LOSS": {
                     "total_tr_loss": 3.3729172945022583,
                     "total_va_loss": 1.1351569890975952,
                 },
-                "S3_KEY": "server/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-loss.json",
+                "S3_KEY": "server/VFL-TASK-YYYY-MM-DD-HH-mm-ss-loss.json",
             },
             {"total_tr_loss": 3.3729172945022583, "total_va_loss": 1.1351569890975952},
         ),
@@ -223,12 +246,61 @@ def test_loss(loss_object, expected):
 
 
 @pytest.fixture
+def prediction_test_params(request):
+    shape = request.param
+    bucket = create_test_bucket()
+    s3_object = boto3.resource("s3").Object(
+        bucket.name, "server/VFL-TASK-YYYY-MM-DD-HH-mm-ss-tr-pred.npy"
+    )
+    value = np.random.rand(shape[0], shape[1])
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        np.save(f"{tmpdirname}/prediction.npy", value, allow_pickle=False)
+        s3_object.upload_file(f"{tmpdirname}/prediction.npy")
+
+    yield {
+        "shape": shape,
+        "s3_object": s3_object,
+        "expected": value,
+    }
+
+    bucket.objects.all().delete()
+    bucket.delete()
+
+
+@pytest.mark.parametrize(
+    "prediction_test_params",
+    [
+        (100, 200),
+        (20000, 1),
+        (1, 20000),
+        (200, 100),
+    ],
+    indirect=True,
+)
+def test_prediction(prediction_test_params):
+    shape = prediction_test_params["shape"]
+    s3_obejct = prediction_test_params["s3_object"]
+    expected = prediction_test_params["expected"]
+    prediction = Prediction(shape, s3_obejct)
+    assert np.all(prediction.value == np.zeros(shape=shape))
+
+    prediction.load()
+    assert np.all(prediction.value == expected)
+
+    prediction.value = np.random.rand(shape[0], shape[1])
+    prediction.save()
+    new_prediction = Prediction(prediction.shape, prediction.s3_object)
+    new_prediction.load()
+    assert np.all(prediction.value == new_prediction.value)
+
+
+@pytest.fixture
 def bucket_name() -> str:
     bucket = create_test_bucket()
 
     set_shuffled_index(
         "functions/init_server/tr_uid.npy",
-        "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+        "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
         bucket.name,
         prefix="common/",
     )
@@ -245,7 +317,7 @@ def shuffled_index() -> ShuffledIndex:
 
     s3_url = set_shuffled_index(
         "functions/init_server/tr_uid.npy",
-        "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+        "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
         bucket.name,
         prefix="common/",
     )
@@ -270,14 +342,14 @@ def shuffled_index() -> ShuffledIndex:
     ),
     [
         (
-            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+            "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
             4,
             0,
             0,
             1024,
             0,
-            np.zeros([29304, 1]),
-            np.zeros([3257, 1]),
+            Prediction([29304, 1], s3_object=None),
+            Prediction([3257, 1], s3_object=None),
             Loss(),
         ),
     ],
@@ -313,8 +385,8 @@ def test_training_session(
     assert session.batch_size == batch_size
     assert session.va_batch_index == va_batch_index
     assert session.shuffled_index.tolist() == shuffled_index.index.tolist()
-    assert np.all(session.tr_pred == tr_pred)
-    assert np.all(session.va_pred == va_pred)
+    assert np.all(session.tr_pred.value == tr_pred.value)
+    assert np.all(session.va_pred.value == va_pred.value)
     assert session.loss.total_tr_loss == loss.total_tr_loss
     assert session.loss.total_va_loss == loss.total_va_loss
 
@@ -333,7 +405,7 @@ def test_training_session(
     ),
     [
         (
-            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
+            "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
             4,
             0,
             0,
