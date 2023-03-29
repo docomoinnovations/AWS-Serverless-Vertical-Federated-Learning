@@ -58,10 +58,12 @@ def download_models(s3_bucket, task_name, num_of_clients):
     s3 = boto3.resource("s3")
     bucket = s3.Bucket(s3_bucket)
     server_model = f"{task_name}-server-model-best.pt"
-    bucket.download_file(server_model, server_model)
+    server_model_key = f"model/{server_model}"
+    bucket.download_file(server_model_key, server_model)
     for i in range(num_of_clients):
         client_model = f"{task_name}-client-model-{i+1}-best.pt"
-        bucket.download_file(client_model, client_model)
+        client_model_key = f"model/{client_model}"
+        bucket.download_file(client_model_key, client_model)
 
 
 seed = 42
