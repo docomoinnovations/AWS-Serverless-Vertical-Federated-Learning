@@ -390,9 +390,7 @@ class ClientTrainer:
         os.remove(
             f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.npy"
         )
-        os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-gradient-{self.client_id}.npy"
-        )
+        os.remove(f"{self.tmp_dir}/{self.session.task_name}-gradient.npy")
 
 
 if __name__ == "__main__":

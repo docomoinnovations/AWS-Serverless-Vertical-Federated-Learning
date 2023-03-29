@@ -14,6 +14,7 @@ from functions.server_training.server_training import (
     TrainingSession,
     DataSet,
     Embed,
+    Gradient,
     Loss,
     Prediction,
 )
@@ -34,28 +35,38 @@ def create_test_bucket():
 
 
 @pytest.mark.parametrize(
-    ("s3_url", "bucket", "key", "file_name"),
+    ("s3_url", "bucket", "key", "prefix", "file_name"),
     [
-        ("s3://test/example.jpg", "test", "example.jpg", "example.jpg"),
+        ("s3://test/example.jpg", "test", "example.jpg", "", "example.jpg"),
         (
             "s3://test/prefix/shuffled-index.npy",
             "test",
             "prefix/shuffled-index.npy",
+            "prefix/",
             "shuffled-index.npy",
         ),
         (
             "s3://test.example.com/prefix/shuffled-index.npy",
             "test.example.com",
             "prefix/shuffled-index.npy",
+            "prefix/",
+            "shuffled-index.npy",
+        ),
+        (
+            "s3://test.example.com/prefix/test/shuffled-index.npy",
+            "test.example.com",
+            "prefix/test/shuffled-index.npy",
+            "prefix/test/",
             "shuffled-index.npy",
         ),
     ],
 )
-def test_s3_url(s3_url, bucket, key, file_name):
+def test_s3_url(s3_url, bucket, key, prefix, file_name):
     s3_url_obj = S3Url(s3_url)
     assert s3_url_obj.url == s3_url
     assert s3_url_obj.bucket == bucket
     assert s3_url_obj.key == key
+    assert s3_url_obj.prefix == prefix
     assert s3_url_obj.file_name == file_name
 
 
@@ -227,6 +238,65 @@ def test_embed(embed_test_params):
     expected = embed_test_params["expected"]
     embed = Embed(s3_url)
     assert embed.value.tolist() == expected.tolist()
+
+
+@pytest.fixture
+def gradient_test_params(request):
+    shape = request.param["shape"]
+    key = request.param["key"]
+    gradient_num = np.random.rand(shape[0], shape[1])
+    gradient = torch.FloatTensor(gradient_num)
+
+    bucket = create_test_bucket()
+    s3_object = boto3.resource("s3").Object(
+        bucket.name,
+        key,
+    )
+
+    yield {
+        "value": gradient,
+        "s3_object": s3_object,
+    }
+
+    bucket.objects.all().delete()
+    bucket.delete()
+
+
+@pytest.mark.parametrize(
+    "gradient_test_params",
+    [
+        {
+            "shape": (9304, 4),
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
+        },
+        {
+            "shape": (3257, 4),
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.npy",
+        },
+    ],
+    indirect=True,
+)
+def test_gradient(gradient_test_params):
+    value = gradient_test_params["value"]
+    s3_object = gradient_test_params["s3_object"]
+
+    gradient = Gradient(value=value, s3_object=s3_object)
+    assert gradient.value.tolist() == value.tolist()
+
+    s3_url = gradient.save()
+    assert s3_object.bucket_name == s3_url.bucket
+    assert s3_object.key == s3_url.key
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/gradient.npy"
+        s3_object = boto3.resource("s3").Object(s3_url.bucket, s3_url.key)
+        s3_object.download_file(file_path)
+        loaded_gradient = torch.FloatTensor(
+            np.load(
+                file=file_path,
+                allow_pickle=False,
+            )
+        )
+        assert loaded_gradient.tolist() == gradient.value.tolist()
 
 
 @pytest.fixture
@@ -525,6 +595,7 @@ def test_init_server_trainer(
         server_trainer.shuffled_index.tolist()
         == training_session.shuffled_index.tolist()
     )
+    assert server_trainer.gradients == dict()
     assert np.all(server_trainer.tr_pred == tr_pred)
     assert np.all(server_trainer.va_pred == va_pred)
     assert server_trainer.loss.total_tr_loss == loss.total_tr_loss
