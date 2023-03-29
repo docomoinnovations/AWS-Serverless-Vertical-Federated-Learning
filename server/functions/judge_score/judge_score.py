@@ -10,13 +10,12 @@ class Score:
         self.patience_counter = patience_counter
 
 
-def get_score(s3_bucket, task_name):
-    file_name = f"{task_name}-score.json"
+def get_score(s3_bucket, key):
     with tempfile.TemporaryDirectory() as tmpdirname:
-        local_file_path = f"{tmpdirname}/{file_name}"
+        local_file_path = f"{tmpdirname}/score.json"
         s3 = boto3.resource("s3")
         try:
-            s3.meta.client.download_file(s3_bucket, file_name, local_file_path)
+            s3.meta.client.download_file(s3_bucket, key, local_file_path)
         except ClientError as e:
             print(e)
             return Score(-1, 0)
@@ -27,10 +26,9 @@ def get_score(s3_bucket, task_name):
             return Score(best_score, patience_counter)
 
 
-def save_score(score, s3_bucket, task_name):
-    file_name = f"{task_name}-score.json"
+def save_score(score, s3_bucket, key):
     with tempfile.TemporaryDirectory() as tmpdirname:
-        local_file_path = f"{tmpdirname}/{file_name}"
+        local_file_path = f"{tmpdirname}/score.json"
         score_data = {
             "best_score": score.best_score,
             "patience_counter": score.patience_counter,
@@ -38,7 +36,7 @@ def save_score(score, s3_bucket, task_name):
         with open(local_file_path, "w") as f:
             json.dump(score_data, f)
         client = boto3.client("s3")
-        client.upload_file(local_file_path, s3_bucket, file_name)
+        client.upload_file(local_file_path, s3_bucket, key)
 
 
 def lambda_handler(event, context):
@@ -61,10 +59,11 @@ def lambda_handler(event, context):
     va_auc = float(items[0]["VaAuc"])
 
     is_best_score = False
+    key = f"server/{task_name}-score.json"
     current_score = (
         Score(best_score=-1, patience_counter=0)
         if epoch_index == 0
-        else get_score(s3_bucket=s3_bucket, task_name=task_name)
+        else get_score(s3_bucket=s3_bucket, key=key)
     )
 
     if va_auc > current_score.best_score:
@@ -77,7 +76,7 @@ def lambda_handler(event, context):
         if current_score.patience_counter > patience:
             is_next_epoch = False
 
-    save_score(score=current_score, s3_bucket=s3_bucket, task_name=task_name)
+    save_score(score=current_score, s3_bucket=s3_bucket, key=key)
 
     response = []
     for item in items:
