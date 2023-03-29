@@ -4,6 +4,7 @@ import sys
 import shutil
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -17,6 +18,16 @@ client_configs = {
     "3": "config/3.json",
     "4": "config/4.json",
 }
+
+
+class S3Url:
+    def __init__(self, url) -> None:
+        self.url = url
+        parsed_url = urlparse(url, allow_fragments=False)
+        self.bucket = parsed_url.netloc
+        self.key = parsed_url.path.lstrip("/")
+        self.file_name = self.key.split("/")[-1]
+        self.prefix = self.key[: -len(self.file_name)]
 
 
 class Dataset:
@@ -169,6 +180,7 @@ class ClientTrainer:
         self.client_id = client_id
         self.queue = queue
         self.s3 = boto3.resource("s3")
+        self.iam_user_id = boto3.client("sts").get_caller_identity()["UserId"]
         self.tr_uid = dataset.tr_uid
         self.tr_x = dataset.tr_x
         self.tr_xcols = dataset.tr_xcols
@@ -260,20 +272,16 @@ class ClientTrainer:
                 response.delete()
 
     def __save_embed(self, bucket: str, key: str) -> str:
-        file_name = f"{self.tmp_dir}/{key}"
-        np.save(file_name, self.embed.detach().cpu().numpy(), allow_pickle=False)
-        key = file_name.split("/")[-1]
-        self.s3.meta.client.upload_file(file_name, bucket, key)
+        file_name = key.split("/")[-1]
+        path = f"{self.tmp_dir}/{file_name}"
+        np.save(path, self.embed.detach().cpu().numpy(), allow_pickle=False)
+        self.s3.meta.client.upload_file(path, bucket, key)
         return f"s3://{bucket}/{key}"
 
-    def __set_gradient(self, s3_uri: str) -> None:
-        bucket = s3_uri.split("/")[2]
-        key = s3_uri.split("/")[-1]
-        local_file_path = f"{self.tmp_dir}/{key}"
-        self.s3.meta.client.download_file(bucket, key, local_file_path)
-        self.gradient = torch.FloatTensor(
-            np.load(local_file_path, allow_pickle=False)
-        ).to()
+    def __set_gradient(self, url: S3Url) -> None:
+        path = f"{self.tmp_dir}/{url.file_name}"
+        self.s3.meta.client.download_file(url.bucket, url.key, path)
+        self.gradient = torch.FloatTensor(np.load(path, allow_pickle=False)).to()
 
     def __forward(self, session: TrainingSession) -> str:
         batch_index = session.batch_index
@@ -290,12 +298,15 @@ class ClientTrainer:
         self.optimizer.zero_grad()
         self.embed = self.model(batch_x)
 
-        key = f"{self.session.task_name}-tr-embed-{self.client_id}.npy"
+        key = (
+            f"{self.iam_user_id}/{self.session.task_name}-tr-embed-{self.client_id}.npy"
+        )
         return self.__save_embed(s3_bucket, key)
 
     def __backward(self):
         self.model.train()
-        self.__set_gradient(self.session.gradient_file_path)
+        url = S3Url(self.session.gradient_file_path)
+        self.__set_gradient(url=url)
         self.embed.backward(self.gradient)
         self.optimizer.step()
 
@@ -310,7 +321,9 @@ class ClientTrainer:
         batch_x = self.va_x[head:tail, :].to()
         self.embed = self.model(batch_x)
 
-        key = f"{self.session.task_name}-va-embed-{self.client_id}.npy"
+        key = (
+            f"{self.iam_user_id}/{self.session.task_name}-va-embed-{self.client_id}.npy"
+        )
         return self.__save_embed(s3_bucket, key)
 
     def __send_task_success(self):
@@ -380,11 +393,8 @@ class ClientTrainer:
         stf_client.close()
 
     def __finalize(self):
-        model_name = (
-            f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
-        )
-        key = model_name.split("/")[-1]
-        self.s3.meta.client.upload_file(model_name, self.session.s3_bucket, key)
+        key = f"model/{self.session.task_name}-client-model-{self.client_id}-best.pt"
+        self.s3.meta.client.upload_file(key, self.session.s3_bucket, key)
         shutil.rmtree(self.tmp_dir)
 
 

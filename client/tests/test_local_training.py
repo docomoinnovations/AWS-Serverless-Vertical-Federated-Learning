@@ -7,6 +7,7 @@ import random
 import string
 import json
 from local_training import (
+    S3Url,
     ClientTrainer,
     Dataset,
     VFLSQS,
@@ -14,6 +15,42 @@ from local_training import (
     ClientModel,
     ShuffledIndex,
 )
+
+
+@pytest.mark.parametrize(
+    ("s3_url", "bucket", "key", "prefix", "file_name"),
+    [
+        ("s3://test/example.jpg", "test", "example.jpg", "", "example.jpg"),
+        (
+            "s3://test/prefix/shuffled-index.npy",
+            "test",
+            "prefix/shuffled-index.npy",
+            "prefix/",
+            "shuffled-index.npy",
+        ),
+        (
+            "s3://test.example.com/prefix/shuffled-index.npy",
+            "test.example.com",
+            "prefix/shuffled-index.npy",
+            "prefix/",
+            "shuffled-index.npy",
+        ),
+        (
+            "s3://test.example.com/prefix/test/shuffled-index.npy",
+            "test.example.com",
+            "prefix/test/shuffled-index.npy",
+            "prefix/test/",
+            "shuffled-index.npy",
+        ),
+    ],
+)
+def test_s3_url(s3_url, bucket, key, prefix, file_name):
+    s3_url_obj = S3Url(s3_url)
+    assert s3_url_obj.url == s3_url
+    assert s3_url_obj.bucket == bucket
+    assert s3_url_obj.key == key
+    assert s3_url_obj.prefix == prefix
+    assert s3_url_obj.file_name == file_name
 
 
 @pytest.mark.parametrize(
