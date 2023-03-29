@@ -4,6 +4,7 @@ import random
 import tempfile
 import boto3
 import json
+from typing import Dict
 from urllib.parse import urlparse
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
@@ -16,6 +17,7 @@ class S3Url:
         self.bucket = parsed_url.netloc
         self.key = parsed_url.path.lstrip("/")
         self.file_name = self.key.split("/")[-1]
+        self.prefix = self.key[: -len(self.file_name)]
 
 
 class DataSet:
@@ -80,6 +82,19 @@ class Embed:
                     allow_pickle=False,
                 )
             )
+
+
+class Gradient:
+    def __init__(self, value: torch.FloatTensor, s3_object) -> None:
+        self.value = value
+        self.s3_object = s3_object
+
+    def save(self) -> S3Url:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            file_path = f"{tmpdirname}/gradient.npy"
+            np.save(file=file_path, arr=self.value.numpy(), allow_pickle=False)
+            self.s3_object.upload_file(file_path)
+        return S3Url(f"s3://{self.s3_object.bucket_name}/{self.s3_object.key}")
 
 
 class Loss:
@@ -196,8 +211,9 @@ class ServerTrainer:
         model: ServerModel,
         optimizer: torch.optim.Adam,
         dataset: DataSet,
+        embeds: Dict[str, Embed] = dict(),
+        gradients: Dict[str, Gradient] = dict(),
     ) -> None:
-        self.tmp_dir = "/tmp/"
         self.task_name = training_session.task_name
         self.num_of_clients = training_session.num_of_clients
         self.client_ids = [str(i + 1) for i in range(self.num_of_clients)]
@@ -208,8 +224,8 @@ class ServerTrainer:
         self.shuffled_index = training_session.shuffled_index
         self.loss = training_session.loss
         self.s3_bucket = s3_bucket
-        self.embeds = dict()
-        self.gradients = dict()
+        self.embeds = embeds
+        self.gradients = gradients
 
         self.tr_uid = dataset.uid
         self.tr_y = dataset.label
@@ -226,23 +242,14 @@ class ServerTrainer:
         self.model = model
         self.optimizer = optimizer
 
-    def __upload_file_to_s3(self, file_path, s3_key) -> bool:
-        client = boto3.client("s3")
-        client.upload_file(file_path, self.s3_bucket, s3_key)
-        return True
-
     def set_embed(self, client_id: str, embed: Embed) -> None:
         self.embeds[client_id] = embed
 
-    def save_gradient(self, file_name_prefix=None) -> dict:
-        embed_files_s3_path = dict()
-        for client_id in self.gradients.keys():
-            file_name = f"{self.task_name if file_name_prefix is None else file_name_prefix}-gradient-{client_id}.npy"
-            local_path = self.tmp_dir + file_name
-            np.save(local_path, self.gradients[client_id].numpy(), allow_pickle=False)
-            self.__upload_file_to_s3(local_path, file_name)
-            embed_files_s3_path[client_id] = f"s3://{self.s3_bucket}/{file_name}"
-        return embed_files_s3_path
+    def set_gradient(self, client_id: str, gradient: Gradient) -> None:
+        self.gradients[client_id] = gradient
+
+    def save_gradient(self, client_id: str) -> S3Url:
+        return self.gradients[client_id].save()
 
     def save_model(self, s3_object) -> S3Url:
         return self.model.save(s3_object)
@@ -287,7 +294,7 @@ class ServerTrainer:
         for i, client_id in enumerate(self.client_ids):
             e_head = i * 4
             e_tail = (i + 1) * 4
-            self.gradients[client_id] = embed.grad[:, e_head:e_tail].cpu()
+            self.gradients[client_id].value = embed.grad[:, e_head:e_tail].cpu()
 
         self.tr_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
@@ -442,7 +449,7 @@ def lambda_handler(event, context):
         print(json.dumps(response))
         return response
 
-    # Set embed from clients
+    # Set embed and gradient
     for input_item in input_items:
         client_id = input_item["MemberId"]
         url = S3Url(input_item["EmbedFile"])
@@ -451,6 +458,13 @@ def lambda_handler(event, context):
             client_id=client_id,
             embed=embed,
         )
+
+        gradient_object = boto3.resource("s3").Object(
+            s3_bucket, f"{url.prefix}{task_name}-gradient.npy"
+        )
+        gradient_value = torch.FloatTensor(np.zeros(embed.value.shape))
+        gradient = Gradient(value=gradient_value, s3_object=gradient_object)
+        server_trainer.set_gradient(client_id=client_id, gradient=gradient)
 
     response = None
 
@@ -463,7 +477,12 @@ def lambda_handler(event, context):
         server_trainer.save_loss()
 
         server_trainer.save_tr_pred()
-        gradient_files = server_trainer.save_gradient()
+
+        gradient_files: Dict[str, str] = dict()
+        for input_item in input_items:
+            client_id = input_item["MemberId"]
+            url = server_trainer.save_gradient(client_id=client_id)
+            gradient_files[client_id] = url.url
 
         # Save model and optimizer
         server_trainer.save_model(s3_model_object)
