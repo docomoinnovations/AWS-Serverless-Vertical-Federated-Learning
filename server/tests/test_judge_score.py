@@ -33,6 +33,7 @@ def bucket_name() -> str:
 def test_get_score(best_score, patience_counter, bucket_name):
     task_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss"
     bucket = boto3.resource("s3").Bucket(bucket_name)
+    key = f"server/{task_name}-score.json"
     with tempfile.TemporaryDirectory() as tmpdirname:
         score_data = {
             "best_score": best_score,
@@ -43,9 +44,9 @@ def test_get_score(best_score, patience_counter, bucket_name):
         with open(file_name, "w") as f:
             json.dump(score_data, f)
 
-        bucket.upload_file(file_name, file_name.split("/")[-1])
+        bucket.upload_file(file_name, key)
 
-    score = get_score(s3_bucket=bucket_name, task_name=task_name)
+    score = get_score(s3_bucket=bucket_name, key=key)
     assert score.best_score == best_score
     assert score.patience_counter == patience_counter
 
@@ -55,13 +56,14 @@ def test_get_score(best_score, patience_counter, bucket_name):
 )
 def test_save_score(best_score, patience_counter, bucket_name):
     task_name = "VFL-TAKS-YYYY-MM-DD-HH-mm-ss"
+    key = f"server/{task_name}-score.json"
     score = Score(best_score=best_score, patience_counter=patience_counter)
-    save_score(score=score, s3_bucket=bucket_name, task_name=task_name)
+    save_score(score=score, s3_bucket=bucket_name, key=key)
     bucket = boto3.resource("s3").Bucket(bucket_name)
     with tempfile.TemporaryDirectory() as tmpdirname:
         file_name = f"{task_name}-score.json"
         local_file_path = f"{tmpdirname}/{file_name}"
-        bucket.download_file(file_name, local_file_path)
+        bucket.download_file(key, local_file_path)
         with open(local_file_path, "r") as f:
             score_data = json.load(f)
             assert score_data["best_score"] == best_score
