@@ -460,7 +460,7 @@ def lambda_handler(event, context):
         )
 
         gradient_object = boto3.resource("s3").Object(
-            s3_bucket, f"{url.prefix}{task_name}-gradient.npy"
+            s3_bucket, f"{url.prefix}{task_name}-gradient-{client_id}.npy"
         )
         gradient_value = torch.FloatTensor(np.zeros(embed.value.shape))
         gradient = Gradient(value=gradient_value, s3_object=gradient_object)

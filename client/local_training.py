@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 import numpy as np
@@ -384,13 +385,7 @@ class ClientTrainer:
         )
         key = model_name.split("/")[-1]
         self.s3.meta.client.upload_file(model_name, self.session.s3_bucket, key)
-        os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-tr-embed-{self.client_id}.npy"
-        )
-        os.remove(
-            f"{self.tmp_dir}/{self.session.task_name}-va-embed-{self.client_id}.npy"
-        )
-        os.remove(f"{self.tmp_dir}/{self.session.task_name}-gradient.npy")
+        shutil.rmtree(self.tmp_dir)
 
 
 if __name__ == "__main__":
