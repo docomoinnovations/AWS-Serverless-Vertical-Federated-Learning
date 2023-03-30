@@ -306,6 +306,11 @@ Resources:
               - !Sub "arn:aws:s3:::${VFLBucket}/common/*"
           - Effect: Allow
             Action:
+              - "s3:PutObject"
+            Resource:
+              - !Sub "arn:aws:s3:::${VFLBucket}/model/*"
+          - Effect: Allow
+            Action:
               - "states:SendTaskSuccess"
             Resource: "*"
 
