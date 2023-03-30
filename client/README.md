@@ -14,37 +14,27 @@ The tools below are necessary for setting up the client.
 
 - Python 3.8
 
-## AWS IAM permissions
-Client needs the following IAM permissions to access AWS APIs.
-- `sqs:GetQueueUrl`
-- `sqs:ReceiveMessage`
-- `sqs:DeleteMessage`
-- `s3:GetObject`
-- `s3:PutObject`
-- `state:SendTaskSuccess`
+## Create IAM user for clients
+VFL client program needs IAM credentials to access AWS services. The program accesses Amazon SQS, Amazon S3 and AWS Step Functions APIs. The IAM policy and group are created when [deploying the server](../server/README.md#deploying-the-server).
 
-This is the example policy for client.
+You need to create IAM user and its access key ID and secret access key.\
+It is recommended to create an IAM user for each VFL client. This will prevent the other clients from accessing the intermediate files.
 
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": {
-        "Effect": "Allow",
-        "Action": [
-            "sqs:GetQueueUrl",
-            "sqs:ReceiveMessage",
-            "sqs:DeleteMessage",
-            "s3:GetObject",
-            "s3:PutObject",
-            "states:SendTaskSuccess"
-        ],
-        "Resource": "*"
-    }
-}
+1. [Creating an IAM user in your AWS account](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html)
+1. [Managing access keys for IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html)
+
+Then, add the users to the group to grant access to AWS services.
+- [Add users to group](https://docs.aws.amazon.com/singlesignon/latest/userguide/adduserstogroups.html)
+
+The group name created by [deploying the server](../server/README.md#deploying-the-server) can be found by the following command:
+
+```shell
+STACK_NAME=[STACK_NAME] aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs[?OutputKey==`IAMGroupNameForClient`].OutputValue' --output text
 ```
+*STACK_NAME* is a name of the CloudFormation stack. It should be `[STACK_NAME]-IAMGroupForClient-XXXXXXXX`.
 
 
-## Installing the libraries
+## Install the libraries
 1. Clone the repository
     ```shell
     git clone https://github.com/docomoinnovations/AWS-Serverless-Vertical-Federated-Learning
@@ -56,3 +46,8 @@ This is the example policy for client.
     cd client
     pip install -r requirements.txt
     ```
+
+## Configure credentials
+Configure IAM credentials on each VFL client.
+If you configure the credentials with environmet variables, set environment variables bellow:
+- [Configure credentials with environment variables (Boto3)](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#environment-variables)

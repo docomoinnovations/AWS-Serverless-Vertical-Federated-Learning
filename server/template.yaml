@@ -280,7 +280,45 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  IAMPolicyForClient:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Managed policy for VFL client
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "sqs:GetQueueUrl"
+              - "sqs:ReceiveMessage"
+              - "sqs:DeleteMessage"
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+            Resource:
+              - !Sub "arn:aws:s3:::${VFLBucket}/${!aws:userid}/*"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource:
+              - !Sub "arn:aws:s3:::${VFLBucket}/common/*"
+          - Effect: Allow
+            Action:
+              - "states:SendTaskSuccess"
+            Resource: "*"
+
+  IAMGroupForClient:
+    Type: AWS::IAM::Group
+    Properties:
+      ManagedPolicyArns:
+        - !Ref IAMPolicyForClient
+
 Outputs:
   StateMachineArn:
     Description: The VFL server state machine ARN
     Value: !Ref FederatedLearningMainStateMachine
+  IAMGroupNameForClient:
+    Description: The IAM group name for VFL clients
+    Value: !Ref IAMGroupForClient
