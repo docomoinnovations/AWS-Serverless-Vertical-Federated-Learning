@@ -10,11 +10,33 @@ from local_training import (
     S3Url,
     ClientTrainer,
     Dataset,
+    Gradient,
     VFLSQS,
-    TrainingSession,
     ClientModel,
     ShuffledIndex,
 )
+
+
+def create_test_bucket():
+    bucket_name = "".join(
+        [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
+    )
+
+    bucket = boto3.resource("s3").Bucket(bucket_name)
+    bucket.create(
+        CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
+    )
+
+    return bucket
+
+
+@pytest.fixture
+def bucket():
+    bucket = create_test_bucket()
+    yield bucket
+
+    bucket.objects.all().delete()
+    bucket.delete()
 
 
 @pytest.mark.parametrize(
@@ -123,103 +145,52 @@ def test_dataset(client, uid, x, cols, va_uid, va_x):
     )
 
 
-@pytest.mark.parametrize(
-    (
-        "task_name",
-        "batch_size",
-        "batch_index",
-        "batch_count",
-        "is_next_batch",
-        "va_batch_index",
-        "va_batch_count",
-        "is_next_va_batch",
-        "task_token",
-        "server_region",
-        "phase",
-        "direction",
-        "epoch_index",
-        "is_next_epoch",
-        "s3_bucket",
-        "shuffled_index_path",
-        "gradient_file_path",
-    ),
-    [
-        (
-            "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
-            1024,
-            10,
-            30,
-            True,
-            0,
-            3,
-            True,
-            "112233445566778899",
-            "us-west-2",
-            "Training",
-            "Forward",
-            5,
-            True,
-            "vfl-bucket-test",
-            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.npy",
-            "s3://vfl-bucket-test/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
-        )
-    ],
-)
-def test_training_session(
-    task_name,
-    batch_size,
-    batch_index,
-    batch_count,
-    is_next_batch,
-    va_batch_index,
-    va_batch_count,
-    is_next_va_batch,
-    task_token,
-    server_region,
-    phase,
-    direction,
-    epoch_index,
-    is_next_epoch,
-    s3_bucket,
-    shuffled_index_path,
-    gradient_file_path,
-):
-    session = TrainingSession(
-        task_name=task_name,
-        batch_size=batch_size,
-        batch_index=batch_index,
-        batch_count=batch_count,
-        is_next_batch=is_next_batch,
-        va_batch_index=va_batch_index,
-        va_batch_count=va_batch_count,
-        is_next_va_batch=is_next_va_batch,
-        task_token=task_token,
-        server_region=server_region,
-        phase=phase,
-        direction=direction,
-        epoch_index=epoch_index,
-        is_next_epoch=is_next_epoch,
-        s3_bucket=s3_bucket,
-        shuffled_index_path=shuffled_index_path,
-        gradient_file_path=gradient_file_path,
+@pytest.fixture
+def gradient_test_params(request):
+    shape = request.param["shape"]
+    key = request.param["key"]
+    gradient_num = np.random.rand(shape[0], shape[1])
+    gradient = torch.FloatTensor(gradient_num)
+
+    bucket = create_test_bucket()
+    s3_object = boto3.resource("s3").Object(
+        bucket.name,
+        key,
     )
-    assert session.task_name == task_name
-    assert session.batch_size == batch_size
-    assert session.batch_index == batch_index
-    assert session.batch_count == batch_count
-    assert session.is_next_batch == is_next_batch
-    assert session.va_batch_index == va_batch_index
-    assert session.va_batch_count == va_batch_count
-    assert session.is_next_va_batch == is_next_va_batch
-    assert session.task_token == task_token
-    assert session.server_region == server_region
-    assert session.phase == phase
-    assert session.direction == direction
-    assert session.epoch_index == epoch_index
-    assert session.is_next_epoch == is_next_epoch
-    assert session.s3_bucket == s3_bucket
-    assert session.shuffled_index_path == shuffled_index_path
-    assert session.gradient_file_path == gradient_file_path
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        file_path = f"{tmpdirname}/gradient.npy"
+        np.save(file=file_path, arr=gradient_num, allow_pickle=False)
+        s3_object.upload_file(file_path)
+
+    yield {
+        "s3_url": S3Url(f"s3://{bucket.name}/{key}"),
+        "expected": gradient,
+    }
+
+    bucket.objects.all().delete()
+    bucket.delete()
+
+
+@pytest.mark.parametrize(
+    "gradient_test_params",
+    [
+        {
+            "shape": (9304, 4),
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
+        },
+        {
+            "shape": (3257, 4),
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.npy",
+        },
+    ],
+    indirect=True,
+)
+def test_gradient(gradient_test_params):
+    s3_url = gradient_test_params["s3_url"]
+    expected = gradient_test_params["expected"]
+    gradient = Gradient(url=s3_url)
+    assert gradient.value.tolist() == expected.tolist()
 
 
 @pytest.fixture
@@ -227,46 +198,48 @@ def dataset(request):
     return Dataset(client=request.param)
 
 
-@pytest.fixture
-def vfl_sqs(request):
-    name = request.param[0]
-    region = request.param[1]
-    client = boto3.client("sqs", region_name=region)
-    client.create_queue(QueueName=name)
-    yield VFLSQS(name=name, region=region)
-
-    queue_url = client.get_queue_url(QueueName=name)["QueueUrl"]
-    client.delete_queue(QueueUrl=queue_url)
-
-
 @pytest.mark.parametrize(
-    ("client", "vfl_sqs", "dataset", "model", "optimizer", "shuffled_index"),
+    (
+        "client",
+        "dataset",
+        "model",
+        "optimizer",
+        "shuffled_index",
+    ),
     [
         (
             "1",
-            ["vfl-test-us-west-1", "us-west-1"],
             "1",
             ClientModel(17, 4),
             torch.optim.Adam(ClientModel(17, 4).parameters(), lr=0.01),
             ShuffledIndex(),
         )
     ],
-    indirect=["vfl_sqs", "dataset"],
+    indirect=[
+        "dataset",
+    ],
 )
-def test_init_client_trainer(
-    client, vfl_sqs, dataset, model, optimizer, shuffled_index
+def test_client_trainer(
+    client,
+    dataset,
+    model,
+    optimizer,
+    shuffled_index,
+    bucket,
 ):
+    s3_best_model_object = boto3.resource("s3").Object(
+        bucket.name,
+        f"model/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-client-model-{client}-best.pt",
+    )
+
     trainer = ClientTrainer(
         client_id=client,
-        queue=vfl_sqs,
         dataset=dataset,
         model=model,
         optimizer=optimizer,
         shuffled_index=shuffled_index,
     )
     assert trainer.client_id == client
-    assert trainer.queue == vfl_sqs
-    assert trainer.s3
     assert len(trainer.tr_uid) == len(dataset.tr_uid)
     assert len(trainer.tr_x) == len(dataset.tr_x)
     assert trainer.tr_xcols == dataset.tr_xcols
@@ -277,7 +250,17 @@ def test_init_client_trainer(
     assert trainer.model == model.to()
     assert trainer.optimizer == optimizer
     assert trainer.embed is None
-    assert trainer.tmp_dir == f"tmp/{client}"
+    assert trainer.va_embed is None
+
+    trainer.commit_model()
+    trainer.save_model(s3_best_model_object)
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        path = f"{tmpdirname}/client-model.pt"
+        s3_best_model_object.download_file(path)
+        saved_model = model
+        saved_model.load_state_dict(torch.load(path))
+
+        assert saved_model == model
 
 
 @pytest.fixture
@@ -356,6 +339,7 @@ def sqs():
     region = "us-west-2"
     client = boto3.client("sqs", region_name=region)
     client.create_queue(QueueName=name)
+    url = client.get_queue_url(QueueName=name)["QueueUrl"]
     test_message = {
         "TaskName": "VFL-TAKS-YYYY-MM-DD-HH-mm-ss",
         "TaskToken": "1234567890",
@@ -379,6 +363,7 @@ def sqs():
     yield {
         "Name": name,
         "Region": region,
+        "Url": url,
         "Message": test_message,
     }
 
@@ -388,10 +373,12 @@ def sqs():
 def test_vfl_sqs(sqs):
     name = sqs["Name"]
     region = sqs["Region"]
+    url = sqs["Url"]
     expected_body = sqs["Message"]
     vfl_sqs = VFLSQS(name=name, region=region)
     assert vfl_sqs.name == name
     assert vfl_sqs.region == region
+    assert vfl_sqs.url == url
 
     message = vfl_sqs.receive_message()
     assert message.receipt_handle

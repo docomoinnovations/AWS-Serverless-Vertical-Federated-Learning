@@ -29,7 +29,7 @@ Then, add the users to the group to grant access to AWS services.
 The group name created by [deploying the server](../server/README.md#deploying-the-server) can be found by the following command:
 
 ```shell
-STACK_NAME=[STACK_NAME] aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs[?OutputKey==`IAMGroupNameForClient`].OutputValue' --output text
+STACK_NAME=[STACK_NAME]; aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs[?OutputKey==`IAMGroupNameForClient`].OutputValue' --output text
 ```
 *STACK_NAME* is a name of the CloudFormation stack. It should be `[STACK_NAME]-IAMGroupForClient-XXXXXXXX`.
 
