@@ -164,7 +164,7 @@ def gradient_test_params(request):
         s3_object.upload_file(file_path)
 
     yield {
-        "s3_url": S3Url(f"s3://{bucket.name}/{key}"),
+        "s3_object": s3_object,
         "expected": gradient,
     }
 
@@ -187,9 +187,9 @@ def gradient_test_params(request):
     indirect=True,
 )
 def test_gradient(gradient_test_params):
-    s3_url = gradient_test_params["s3_url"]
+    s3_object = gradient_test_params["s3_object"]
     expected = gradient_test_params["expected"]
-    gradient = Gradient(url=s3_url)
+    gradient = Gradient(s3_object=s3_object)
     assert gradient.value.tolist() == expected.tolist()
 
 

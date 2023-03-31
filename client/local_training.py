@@ -50,10 +50,9 @@ class Dataset:
 
 
 class Gradient:
-    def __init__(self, url: S3Url) -> None:
-        self.url = url
+    def __init__(self, s3_object) -> None:
+        self.s3_object = s3_object
 
-        s3_object = boto3.resource("s3").Object(url.bucket, url.key)
         with tempfile.TemporaryDirectory() as tmpdirname:
             file_path = f"{tmpdirname}/gradient.npy"
             s3_object.download_file(file_path)
@@ -219,17 +218,12 @@ class ClientTrainer:
             s3_object.upload_file(path)
 
 
-def send_task_success(token: str, output: dict, region: str):
-    client = boto3.client(
-        "stepfunctions",
-        region_name=region,
-    )
+def send_task_success(client, token: str, output: dict):
     str_output = json.dumps(output)
     client.send_task_success(
         taskToken=token,
         output=str_output,
     )
-    client.close()
 
 
 if __name__ == "__main__":
@@ -244,6 +238,7 @@ if __name__ == "__main__":
 
     iam_user_id = boto3.client("sts").get_caller_identity()["UserId"]
     s3 = boto3.resource("s3")
+    stf_client = None
 
     sqs_region = client_config["sqs_region"]
     sqs_name = client_config["sqs_name"]
@@ -280,6 +275,12 @@ if __name__ == "__main__":
             phase = message["Phase"]
             s3_bucket = message["VFLBucket"]
 
+            if stf_client is None:
+                stf_client = boto3.client(
+                    "stepfunctions",
+                    region_name=server_region,
+                )
+
             s3_best_model_object = s3.Object(
                 s3_bucket,
                 f"model/{task_name}-client-model-{client_id}-best.pt",
@@ -295,9 +296,9 @@ if __name__ == "__main__":
                 client_trainer.save_model(s3_object=s3_best_model_object)
                 output["TaskId"] = client_id.zfill(4) + "-end"
                 send_task_success(
+                    client=stf_client,
                     token=task_token,
                     output=output,
-                    region=server_region,
                 )
                 response.delete()
                 print("End training.")
@@ -344,7 +345,10 @@ if __name__ == "__main__":
                     ] = f"s3://{s3_tr_embed_object.bucket_name}/{s3_tr_embed_object.key}"
                 elif direction == "Backward":
                     gradient_url = S3Url(url=message["GradientFile"])
-                    gradient = Gradient(url=gradient_url)
+                    s3_gradient_object = s3.Object(
+                        gradient_url.bucket, gradient_url.key
+                    )
+                    gradient = Gradient(s3_object=s3_gradient_object)
                     client_trainer.backward(gradient=gradient)
 
             elif phase == "Validation":
@@ -356,5 +360,9 @@ if __name__ == "__main__":
                     "EmbedFile"
                 ] = f"s3://{s3_va_embed_object.bucket_name}/{s3_va_embed_object.key}"
 
-            send_task_success(token=task_token, output=output, region=server_region)
+            send_task_success(
+                client=stf_client,
+                token=task_token,
+                output=output,
+            )
             response.delete()
