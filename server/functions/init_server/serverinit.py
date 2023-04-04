@@ -4,6 +4,7 @@ import boto3
 import pandas
 import numpy as np
 import os
+import json
 import tempfile
 from time import gmtime, strftime
 
@@ -13,24 +14,64 @@ def get_queues_to_create(num_of_queues):
         print("num_of_clients must be 1 to 4")
         return []
 
-    regions = [
-        "us-east-1",
-        "us-west-2",
-        "eu-west-1",
-        "ap-northeast-1",
+    queues = [
+        {
+            "Name": "vfl-us-east-1",
+            "Region": "us-east-1",
+            "ClientId": "1",
+        },
+        {
+            "Name": "vfl-us-west-2",
+            "Region": "us-west-2",
+            "ClientId": "2",
+        },
+        {
+            "Name": "vfl-eu-west-1",
+            "Region": "eu-west-1",
+            "ClientId": "3",
+        },
+        {
+            "Name": "vfl-ap-northeast-1",
+            "Region": "ap-northeast-1",
+            "ClientId": "4",
+        },
     ]
-
-    queues = []
-    for region in regions:
-        queues.append({"Name": f"vfl-{region}", "Region": region})
 
     return queues[:num_of_queues]
 
 
-def create_sqs(sqs_region, sqs_name):
+def create_sqs(sqs_region, sqs_name, client_id):
     client = boto3.client("sqs", region_name=sqs_region)
     client.create_queue(QueueName=sqs_name)
+
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    policy = {
+        "Version": "2012-10-17",
+        "Id": f"PolicyForVFLClient{client_id}",
+        "Statement": [
+            {
+                "Sid": "AllowQueueAction",
+                "Effect": "Allow",
+                "Principal": {"AWS": f"arn:aws:iam::{account_id}:root"},
+                "Action": [
+                    "sqs:GetQueueUrl",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                ],
+                "Resource": f"arn:aws:sqs:{sqs_region}:{account_id}:{sqs_name}",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:PrincipalTag/vfl-client-id": client_id,
+                    }
+                },
+            }
+        ],
+    }
+
     queue_url = client.get_queue_url(QueueName=sqs_name)["QueueUrl"]
+    client.set_queue_attributes(
+        QueueUrl=queue_url, Attributes={"Policy": json.dumps(policy)}
+    )
     return queue_url
 
 
@@ -87,7 +128,8 @@ def lambda_handler(event, context):
     for queue in queues_to_create:
         region = queue["Region"]
         name = queue["Name"]
-        queues.append(create_sqs(sqs_region=region, sqs_name=name))
+        client_id = queue["ClientId"]
+        queues.append(create_sqs(sqs_region=region, sqs_name=name, client_id=client_id))
         sqs_purge(region, name)
 
     # S3 bucket to store shuffled index

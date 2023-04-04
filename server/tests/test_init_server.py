@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import random
 import string
+import json
 import tempfile
 from functions.init_server.serverinit import (
     get_queues_to_create,
@@ -18,29 +19,74 @@ from functions.init_server.serverinit import (
 @pytest.mark.parametrize(
     ("num_of_queues", "expected"),
     [
-        (1, [{"Name": "vfl-us-east-1", "Region": "us-east-1"}]),
+        (
+            1,
+            [
+                {
+                    "Name": "vfl-us-east-1",
+                    "Region": "us-east-1",
+                    "ClientId": "1",
+                }
+            ],
+        ),
         (
             2,
             [
-                {"Name": "vfl-us-east-1", "Region": "us-east-1"},
-                {"Name": "vfl-us-west-2", "Region": "us-west-2"},
+                {
+                    "Name": "vfl-us-east-1",
+                    "Region": "us-east-1",
+                    "ClientId": "1",
+                },
+                {
+                    "Name": "vfl-us-west-2",
+                    "Region": "us-west-2",
+                    "ClientId": "2",
+                },
             ],
         ),
         (
             3,
             [
-                {"Name": "vfl-us-east-1", "Region": "us-east-1"},
-                {"Name": "vfl-us-west-2", "Region": "us-west-2"},
-                {"Name": "vfl-eu-west-1", "Region": "eu-west-1"},
+                {
+                    "Name": "vfl-us-east-1",
+                    "Region": "us-east-1",
+                    "ClientId": "1",
+                },
+                {
+                    "Name": "vfl-us-west-2",
+                    "Region": "us-west-2",
+                    "ClientId": "2",
+                },
+                {
+                    "Name": "vfl-eu-west-1",
+                    "Region": "eu-west-1",
+                    "ClientId": "3",
+                },
             ],
         ),
         (
             4,
             [
-                {"Name": "vfl-us-east-1", "Region": "us-east-1"},
-                {"Name": "vfl-us-west-2", "Region": "us-west-2"},
-                {"Name": "vfl-eu-west-1", "Region": "eu-west-1"},
-                {"Name": "vfl-ap-northeast-1", "Region": "ap-northeast-1"},
+                {
+                    "Name": "vfl-us-east-1",
+                    "Region": "us-east-1",
+                    "ClientId": "1",
+                },
+                {
+                    "Name": "vfl-us-west-2",
+                    "Region": "us-west-2",
+                    "ClientId": "2",
+                },
+                {
+                    "Name": "vfl-eu-west-1",
+                    "Region": "eu-west-1",
+                    "ClientId": "3",
+                },
+                {
+                    "Name": "vfl-ap-northeast-1",
+                    "Region": "ap-northeast-1",
+                    "ClientId": "4",
+                },
             ],
         ),
     ],
@@ -55,10 +101,40 @@ def prep_create_sqs():
     sqs_name = "".join(
         [random.choice(string.ascii_lowercase + string.digits) for i in range(20)]
     )
+    client_id = "".join(
+        [random.choice(string.ascii_lowercase + string.digits) for i in range(3)]
+    )
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    policy = {
+        "Version": "2012-10-17",
+        "Id": f"PolicyForVFLClient{client_id}",
+        "Statement": [
+            {
+                "Sid": "AllowQueueAction",
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": f"arn:aws:iam::{account_id}:root",
+                },
+                "Action": [
+                    "sqs:GetQueueUrl",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                ],
+                "Resource": f"arn:aws:sqs:{sqs_region}:{account_id}:{sqs_name}",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:PrincipalTag/vfl-client-id": client_id,
+                    }
+                },
+            },
+        ],
+    }
 
     yield {
         "Region": sqs_region,
         "Name": sqs_name,
+        "ClientId": client_id,
+        "Policy": policy,
     }
 
     sqs_url = boto3.client("sqs", region_name=sqs_region).get_queue_url(
@@ -70,11 +146,23 @@ def prep_create_sqs():
 def test_create_sqs(prep_create_sqs):
     region = prep_create_sqs["Region"]
     name = prep_create_sqs["Name"]
-    sqs_url = create_sqs(region, name)
-    expected = boto3.client("sqs", region_name=region).get_queue_url(QueueName=name)[
-        "QueueUrl"
-    ]
+    client_id = prep_create_sqs["ClientId"]
+    expected_policy = prep_create_sqs["Policy"]
+
+    sqs_url = create_sqs(region, name, client_id)
+    client = boto3.client("sqs", region_name=region)
+    expected = client.get_queue_url(QueueName=name)["QueueUrl"]
     assert sqs_url == expected
+
+    policy = json.loads(
+        client.get_queue_attributes(
+            QueueUrl=sqs_url,
+            AttributeNames=["Policy"],
+        )[
+            "Attributes"
+        ]["Policy"]
+    )
+    assert policy == expected_policy
 
 
 @pytest.mark.parametrize(
