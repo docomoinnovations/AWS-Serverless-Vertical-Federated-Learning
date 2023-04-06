@@ -50,9 +50,23 @@ def create_sqs(sqs_region, sqs_name, client_id):
         "Id": f"PolicyForVFLClient{client_id}",
         "Statement": [
             {
+                "Sid": "DenyAccessFromPrincipalNotInServerAccount",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "sqs:*",
+                "Resource": f"arn:aws:sqs:{sqs_region}:{account_id}:{sqs_name}",
+                "Condition": {
+                    "StringNotEquals": {
+                        "aws:PrincipalAccount": account_id,
+                    }
+                },
+            },
+            {
                 "Sid": "AllowQueueAction",
                 "Effect": "Allow",
-                "Principal": {"AWS": f"arn:aws:iam::{account_id}:root"},
+                "Principal": {
+                    "AWS": "*",
+                },
                 "Action": [
                     "sqs:GetQueueUrl",
                     "sqs:ReceiveMessage",
@@ -64,7 +78,7 @@ def create_sqs(sqs_region, sqs_name, client_id):
                         "aws:PrincipalTag/vfl-client-id": client_id,
                     }
                 },
-            }
+            },
         ],
     }
 

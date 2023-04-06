@@ -3,8 +3,8 @@ The VFL client is a local Python program which can run on any location. In our e
 
 |Client|Region|
 | --- | --- |
-|#1|us-west-2|
-|#2|us-east-1|
+|#1|us-east-1|
+|#2|us-west-2|
 |#3|eu-west-1|
 |#4|ap-northeast-1|
 
@@ -20,19 +20,41 @@ VFL client program needs IAM credentials to access AWS services. The program acc
 You need to create IAM user and its access key ID and secret access key.\
 It is recommended to create an IAM user for each VFL client. This will prevent the other clients from accessing the intermediate files.
 
-1. [Creating an IAM user in your AWS account](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html)
-1. [Managing access keys for IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html)
+We provide a script to create the IAM users for clients.
 
-Then, add the users to the group to grant access to AWS services.
-- [Add users to group](https://docs.aws.amazon.com/singlesignon/latest/userguide/adduserstogroups.html)
+1. Run the commands to download the script
+    ```shell
+    git clone https://github.com/docomoinnovations/AWS-Serverless-Vertical-Federated-Learning
+    cd AWS-Serverless-Vertical-Federated-Learning/client/utils
+    ```
+1. Install the libraries
+    ```shell
+    pip install -r requirements.txt
+    ```
+1. Run the script to create users
+    ```shell
+    python create_iam_users.py --stack-name [STACK_NAME] --region [REGION]
+    ```
+    *STACK_NAME* is a name of the CloudFormation stack created when [deploying the server](../server/README.md#deploying-the-server).\
+    *REGION* is a region of the CloudFormation stack.
 
-The group name created by [deploying the server](../server/README.md#deploying-the-server) can be found by the following command:
+    Then, you can get outputs as bellow:
+    ```shell
+    #############################################
+    # Client ID: 1 (IAM user: vfl-client-xxxxx) #
+    #############################################
+    export AWS_ACCESS_KEY_ID="<AWS_ACCESS_KEY_ID>"
+    export AWS_SECRET_ACCESS_KEY="<AWS_SECRET_ACCESS_KEY>"
 
-```shell
-STACK_NAME=[STACK_NAME]; aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs[?OutputKey==`IAMGroupNameForClient`].OutputValue' --output text
-```
-*STACK_NAME* is a name of the CloudFormation stack. It should be `[STACK_NAME]-IAMGroupForClient-XXXXXXXX`.
-
+    #############################################
+    # Client ID: 2 (IAM user: vfl-client-yyyyy) #
+    #############################################
+    export AWS_ACCESS_KEY_ID=........
+    .
+    .
+    .
+    ```
+    The outputs includes commands to set IAM user credentials for each client. You can just copy the commands, paste and run it in your terminal of each client to set the credentials.
 
 ## Install the libraries
 1. Clone the repository
@@ -47,7 +69,14 @@ STACK_NAME=[STACK_NAME]; aws cloudformation describe-stacks --stack-name $STACK_
     pip install -r requirements.txt
     ```
 
-## Configure credentials
-Configure IAM credentials on each VFL client.
-If you configure the credentials with environmet variables, set environment variables bellow:
-- [Configure credentials with environment variables (Boto3)](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#environment-variables)
+## Clean up IAM users
+We provide a script to clean up IAM users. When you no longer need IAM credentials for VFL client, run the command to delete all users.\
+Note that the command must run before deleting the CloudFormation stack of VFL server.
+```shell
+git clone https://github.com/docomoinnovations/AWS-Serverless-Vertical-Federated-Learning
+cd AWS-Serverless-Vertical-Federated-Learning/client/utils
+pip install -r requirements.txt
+python clean_up_users.py --stack-name [STACK_NAME] --region [REGION]
+```
+*STACK_NAME* is a name of the CloudFormation stack created when [deploying the server](../server/README.md#deploying-the-server).\
+*REGION* is a region of the CloudFormation stack.

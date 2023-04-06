@@ -35,8 +35,8 @@ Our experiment with [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adul
 
 |Client|Region|
 | :--- | :--- |
-|#1|us-west-2|
-|#2|us-east-1|
+|#1|us-east-1|
+|#2|us-west-2|
 |#3|eu-west-1|
 |#4|ap-northeast-1|
 
@@ -105,8 +105,8 @@ Both the server and the clients are set up, you can run the experiment.
 
     |Clinet|Queue name|Region|
     | --- | --- | --- |
-    |#1|vfl-us-west-2|us-west-2|
-    |#2|vfl-us-east-1|us-east-1|
+    |#1|vfl-us-east-1|us-east-1|
+    |#2|vfl-us-west-2|us-west-2|
     |#3|vfl-eu-west-1|eu-west-1|
     |#4|vfl-ap-northeast-1|ap-northeast-1|
 

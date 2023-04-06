@@ -163,6 +163,7 @@ Resources:
               - "sqs:CreateQueue"
               - "sqs:PurgeQueue"
               - "sqs:GetQueueUrl"
+              - "sqs:SetQueueAttributes"
             Resource:
               - "*"
 
