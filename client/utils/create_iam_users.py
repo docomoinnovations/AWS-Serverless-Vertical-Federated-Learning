@@ -122,17 +122,14 @@ if __name__ == "__main__":
             UserName=iam_user_name,
         )
 
-    print(
-        "{:<10} {:<20} {:<25} {:<30}".format(
-            "Client ID", "IAM user name", "Access key ID", "Secret access key"
-        )
-    )
+    print("Run the following commands in each client terminal to set IAM credentials.")
     for iam_user in iam_users:
-        print(
-            "{:<10} {:<20} {:<25} {:<30}".format(
-                iam_user["ClientId"],
-                iam_user["UserName"],
-                iam_user["AccessKeyId"],
-                iam_user["SecretAccessKey"],
-            )
+        title = "# Client ID: {} (IAM user: {}) #".format(
+            iam_user["ClientId"], iam_user["UserName"]
         )
+        print("")
+        print("#" * len(title))
+        print(title)
+        print("#" * len(title))
+        print('export AWS_ACCESS_KEY_ID="{}"'.format(iam_user["AccessKeyId"]))
+        print('export AWS_SECRET_ACCESS_KEY="{}"'.format(iam_user["SecretAccessKey"]))
