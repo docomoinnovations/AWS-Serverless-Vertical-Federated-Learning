@@ -50,7 +50,8 @@ It describes the acurracy of the model is improved as the number of clients incr
 | #1 + #2 + #3 + #4 | 0.9007 | 1,758 |
 
 ## Get Started
-You can start an experiment with setting up a server and clients.
+You can start an experiment with setting up a server and clients.\
+*The experiment was tested to work on **macOS Ventura with M1 processor**.*
 
 ### Sample data preparation
 Before setting up server and clients, the sample data needs to be prepared for the experiment.
