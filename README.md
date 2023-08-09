@@ -43,11 +43,12 @@ Our experiment with [Adult DataSet](https://archive.ics.uci.edu/ml/datasets/Adul
 The following table describes the ROC-AUC and total training time of this experiment under the number of epoch = 10 and the batch size = 1,024.
 It describes the acurracy of the model is improved as the number of clients increases. Note that the server and the clients don't access their local data each other while training.
 
-|Clients|ROC-AUC|Training Time [s]|
-| :--- | :--- | :--- |
-| #1 + #2 | 0.8117 | 1,187 |
-| #1 + #2 + #3 | 0.8887 | 1,575 |
-| #1 + #2 + #3 + #4 | 0.9007 | 1,758 |
+||Non-Sparse||Sparse||Ratio||
+| :--- | :--- | :--- | :--- | :--- |:--- | :--- |
+|Clients|ROC-AUC|Training Time [s]|ROC-AUC|Training Time [s]|ROC-AUC Drop |Time Reduce|
+| #1 + #2 | 0.8117 | 1,187 |0.8019 | 1,071 | 1.21%|9.77%|
+| #1 + #2 + #3 | 0.8887 | 1,575 |0.8866| 1,405 |0.24%|10.79%|
+| #1 + #2 + #3 + #4 | 0.9007 | 1,758 |0.9001 | 1,532 |0.07%|12.85%|
 
 ## Get Started
 You can start an experiment with setting up a server and clients.\
