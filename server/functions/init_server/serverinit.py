@@ -148,7 +148,6 @@ def lambda_handler(event, context):
 
     # S3 bucket to store shuffled index
     s3_bucket = event["s3_bucket"]
-
     task_name = "VFL-Task-" + strftime("%Y-%m-%d-%H-%M-%S", gmtime())
     batch_size = int(event["batch_size"])
     batch_count = get_batch_count(dataset=f"{dir}/tr_uid.npy", batch_size=batch_size)
@@ -176,6 +175,7 @@ def lambda_handler(event, context):
                 "IsNextVaBatch": 0 + 1 < va_batch_count,
                 "TaskName": task_name,
                 "ShuffledIndexPath": shuffled_index_path,
+                
             }
         )
 

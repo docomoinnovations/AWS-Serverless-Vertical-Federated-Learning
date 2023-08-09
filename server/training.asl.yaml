@@ -14,6 +14,7 @@ States:
               BatchSize: ${BatchSize}
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
+              UseSparse: ${UseSparse}
               VaBatchIndex.$: $.VaBatchIndex
               VaBatchCount.$: $.VaBatchCount
               IsNextBatch.$: $.IsNextBatch
@@ -39,6 +40,8 @@ States:
         BatchSize: ${BatchSize}
         Phase: Training
         VFLBucket: ${VFLBucket}
+        SparseLambda: ${SparseLambda}
+        UseSparse: ${UseSparse}
     Next: ClientBackward
   ClientBackward:
     Type: Map
@@ -53,6 +56,7 @@ States:
             QueueUrl.$: $.SqsUrl
             MessageBody:
               BatchSize: ${BatchSize}
+              UseSparse: ${UseSparse}
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
               VaBatchIndex.$: $.VaBatchIndex

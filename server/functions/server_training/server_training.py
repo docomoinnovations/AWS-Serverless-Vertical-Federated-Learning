@@ -8,6 +8,7 @@ from typing import Dict
 from urllib.parse import urlparse
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
+import math
 
 
 class S3Url:
@@ -33,6 +34,153 @@ class DataSet:
         self.va_label = torch.FloatTensor(np.load(va_label, allow_pickle=False))
         self.va_uid = torch.LongTensor(np.load(va_uid, allow_pickle=False))
 
+        
+class Encoder:
+    def __init__(self,encode_type)-> None:
+        self.encode_type = encode_type
+        
+    def encode(self,src_info):
+        if self.encode_type == 'emb_svfl16':
+            ec, pos = self.sparse_encode16(src_info['embed'], get_position=2)
+            result = {
+                'ec' : ec,
+                'pos' : pos,
+            }
+            return result
+        if self.encode_type == 'emb':
+            result = {
+            'ec' : src_info['embed'],
+            }
+            return result
+        if self.encode_type == 'gradient_svfl16':
+            gec = self.sparse_encode16(src_info['ge'], get_position=1, nz_pos=src_info['nz_pos'])
+            result = {
+            'gec': gec,
+            }
+            return result
+        if self.encode_type == 'gradient':
+            result = {
+                'gec' : src_info['ge'],
+            }
+            return result
+        
+    def sparse_encode16(self, src, get_position=0, nz_pos=None, axis=1):
+        # src (gpu, float32), nz_pos (cpu, bool)
+        samples = src.shape[0]
+        dims    = src.shape[1]
+
+        # run-length compress by axis=1
+        if axis==1:
+            dst = src.detach().cpu().t().reshape(-1)
+        else:
+            dst = src.detach().cpu().reshape(-1)
+        length = len(dst)
+
+        if nz_pos is None:
+            nz_pos = (dst!=0)
+
+        non_zero_values = dst[nz_pos].to(torch.float16)
+
+        #######################
+        # Extract change points
+        #######################
+        nz_pos = nz_pos.char()
+        ind = torch.arange(0, length)#, dtype=torch.int16)
+
+        # none zero position
+        nz_cp = nz_pos - torch.cat((torch.CharTensor([0]), nz_pos[0:-1]), 0)
+        nz_head = ind[nz_cp==1]
+        nz_tail = ind[nz_cp==-1]
+
+        if get_position==0:
+            # Fully encode
+            info = {
+                'samples': samples, #int
+                'dims': dims, #int
+                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
+                'nz_head': nz_head.to(torch.int16), # int16, tensor, 1d-array
+                'nz_tail': nz_tail.to(torch.int16), # int16, tensor, 1d-array
+            }
+            return info
+        elif get_position==1:
+            # Without position
+            info = {
+                'samples': samples, #int
+                'dims': dims, #int
+                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
+            }
+            return info
+        elif get_position==2:
+            # Duplicate position
+            info = {
+                'samples': samples, #int
+                'dims': dims, #int
+                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
+                'nz_head': nz_head.to(torch.int16), # int16, tensor, 1d-array
+                'nz_tail': nz_tail.to(torch.int16), # int16, tensor, 1d-array
+            }
+            position = {
+                'nz_head': nz_head, # long, tensor, cpu, 1d-array
+                'nz_tail': nz_tail, # long, tensor, cpu, 1d-array
+            }
+            return info, position
+        
+class Decoder:
+    def __init__(self, decode_type):
+        self.decode_type = decode_type
+        
+    def decode(self,src_info):
+        result = {}
+        if self.decode_type == 'gradient_svfl16':
+            ge,_ = self.sparse_decode16(src_info['ge'], set_position=src_info['pos'])
+            result = {
+                'ge': ge,
+            }
+            return ge
+        if self.decode_type == 'gradient':
+            result = {
+                'ge': src_info['ge'],
+            }
+            return result 
+        if self.decode_type == 'emb_svfl16':
+            value, nz_pos = self.sparse_decode16(info = src_info['e'])
+            result = {
+                'value': value,
+                'nz_pos':nz_pos,
+            }
+            return result
+        if self.decode_type == 'emb':
+            result = {
+            'value': src_info['e'].to(),
+            }
+            print(result)
+            return result
+        
+    def sparse_decode16(self,info, set_position=None):
+        # Extract data
+        samples = info['samples']
+        dims    = info['dims']
+        length  = samples * dims # info['length']
+        if set_position is None:
+            nz_head = info['nz_head'].long()
+            nz_tail = info['nz_tail'].long()
+        else:
+            nz_head = set_position['nz_head']#.long()
+            nz_tail = set_position['nz_tail']#.long()
+
+        nz_cp = torch.zeros(length, dtype=torch.int8)
+
+        nz_cp[nz_head] = 1
+        nz_cp[nz_tail] = -1
+
+        nz_pos = torch.cumsum(nz_cp, dim=0).bool()
+
+        dst = torch.zeros(length)
+        dst[nz_pos] = info['non_zero_values'].float()
+
+        dst = dst.reshape((dims, samples)).t().to()
+
+        return dst, nz_pos
 
 class ShuffledIndex:
     def __init__(self, s3_url: S3Url):
@@ -69,33 +217,37 @@ class Prediction:
 
 
 class Embed:
-    def __init__(self, url: S3Url) -> None:
+    def __init__(self, url: S3Url,decoder) -> None:
         self.url = url
-
+        
         s3_object = boto3.resource("s3").Object(url.bucket, url.key)
         with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/embed.npy"
+            file_path = f"{tmpdirname}/_emb.pt"
             s3_object.download_file(file_path)
-            self.value = torch.FloatTensor(
-                np.load(
-                    file=file_path,
-                    allow_pickle=False,
-                )
-            )
+            e = torch.load(file_path)
+            src_info = {}
+            src_info['e'] = e
+            self.decoded_result = decoder.decode(src_info)
+            self.value = self.decoded_result['value']
 
-
+        
 class Gradient:
-    def __init__(self, value: torch.FloatTensor, s3_object) -> None:
-        self.value = value
+    def __init__(self, gradient_info, s3_object,encoder) -> None:
+        self.gradient_info = gradient_info
         self.s3_object = s3_object
-
+        self.encoder = encoder
+        self.value = self.gradient_info['ge']
+        
+    
     def save(self) -> S3Url:
+        self.gradient_info['ge'] = self.value
+        result = self.encoder.encode(self.gradient_info)
+        gec = result['gec']
         with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/gradient.npy"
-            np.save(file=file_path, arr=self.value.numpy(), allow_pickle=False)
+            file_path = f'{tmpdirname}/ge.pt'
+            torch.save(gec, file_path)
             self.s3_object.upload_file(file_path)
         return S3Url(f"s3://{self.s3_object.bucket_name}/{self.s3_object.key}")
-
 
 class Loss:
     def __init__(self, s3_object=None) -> None:
@@ -150,32 +302,47 @@ def set_seed(seed):
     random.seed(seed)
 
 
-class ServerModel(torch.nn.Module):
-    def __init__(self, hidden_size, out_size):
-        super(ServerModel, self).__init__()
-        self.h2h = torch.nn.Linear(hidden_size, hidden_size // 2)
-        self.h2o = torch.nn.Linear(hidden_size // 2, out_size)
 
-        set_seed(seed)
-        torch.nn.init.xavier_uniform_(self.h2h.weight.data)
-        torch.nn.init.ones_(self.h2h.bias.data)
+class ServerModel(torch.nn.Module):
+    def __init__(self, hidden_size, out_size, hidden_layer_count=1):
+        super(ServerModel, self).__init__()
+        self.hidden_layer_count = hidden_layer_count
+        self.h2h, hidden_size = self._hidden_layers(hidden_size)
+        self.h2o = torch.nn.Linear(hidden_size, out_size)   
+        
+        
+        # Reproducability
         set_seed(seed)
         torch.nn.init.xavier_uniform_(self.h2o.weight.data)
         torch.nn.init.ones_(self.h2o.bias.data)
+                
+        
+    def _hidden_layers(self, hidden_size):
+        layers = []
+        for i in range(self.hidden_layer_count):
+            h2h = torch.nn.Linear(hidden_size, hidden_size//2)
+            layers.append(h2h)
+            # Reproducability
+            set_seed(seed)
+            torch.nn.init.xavier_uniform_(h2h.weight.data)
+            torch.nn.init.ones_(h2h.bias.data)
 
+            layers.append(torch.nn.ReLU())
+            hidden_size = hidden_size//2
+        
+        return torch.nn.Sequential(*layers), hidden_size
+        
     def forward(self, h):
         h = self.h2h(h)
-        h = F.relu(h)
-        o = self.h2o(h)
-        return o
-
+        output = self.h2o(h)
+        return output
+    
     def save(self, s3_object) -> S3Url:
         with tempfile.TemporaryDirectory() as tmpdirname:
             file_path = f"{tmpdirname}/{s3_object.bucket_name}"
             torch.save(self.state_dict(), file_path)
             s3_object.upload_file(file_path)
         return S3Url(f"s3://{s3_object.bucket_name}/{s3_object.key}")
-
 
 class TrainingSession:
     def __init__(
@@ -190,6 +357,7 @@ class TrainingSession:
         tr_pred,
         va_pred,
         loss,
+        sparse_embed_lambda,
     ) -> None:
         self.task_name = task_name
         self.num_of_clients = num_of_clients
@@ -201,6 +369,7 @@ class TrainingSession:
         self.tr_pred = tr_pred
         self.va_pred = va_pred
         self.loss = loss
+        self.sparse_embed_lambda = sparse_embed_lambda
 
 
 class ServerTrainer:
@@ -216,6 +385,7 @@ class ServerTrainer:
     ) -> None:
         self.task_name = training_session.task_name
         self.num_of_clients = training_session.num_of_clients
+        self.sparse_embed_lambda = training_session.sparse_embed_lambda
         self.client_ids = [str(i + 1) for i in range(self.num_of_clients)]
         self.epoch_index = training_session.epoch_index
         self.batch_index = training_session.batch_index
@@ -244,7 +414,8 @@ class ServerTrainer:
 
     def set_embed(self, client_id: str, embed: Embed) -> None:
         self.embeds[client_id] = embed
-
+    
+        
     def set_gradient(self, client_id: str, gradient: Gradient) -> None:
         self.gradients[client_id] = gradient
 
@@ -280,23 +451,29 @@ class ServerTrainer:
         batch_y = self.tr_y[si, :]
         self.optimizer.zero_grad()
         embed_tuple = ()
+        sparse_embed_loss = torch.norm(self.embeds[self.client_ids[0]].value,p=1,dim=1).mean()-torch.norm(self.embeds[self.client_ids[0]].value,p=1,dim=1).mean()
         for client_id in self.client_ids:
             embed_tuple = (*embed_tuple, self.embeds[client_id].value)
+            sparse_embed_loss = sparse_embed_loss + torch.norm(self.embeds[client_id].value, p=1, dim=1).mean()
         embed = torch.cat(embed_tuple, 1)
         embed.requires_grad_(True)
-
+        
         pred_y = self.model(embed)
         loss = self.criterion(pred_y, batch_y)
+        ## L1-norm
+        if self.sparse_embed_lambda > 0:
+            loss = loss + self.sparse_embed_lambda * (sparse_embed_loss)/float(self.num_of_clients)
         loss.backward()
         self.optimizer.step()
         self.loss.total_tr_loss += loss.item()
-
         for i, client_id in enumerate(self.client_ids):
             e_head = i * 4
             e_tail = (i + 1) * 4
             self.gradients[client_id].value = embed.grad[:, e_head:e_tail].cpu()
 
         self.tr_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
+        
+    
 
     def validate(self) -> None:
         va_sample_count = len(self.va_uid)
@@ -334,6 +511,8 @@ def lambda_handler(event, context):
     s3_bucket = event["VFLBucket"]
     phase = event["Phase"]
     batch_size = int(event["BatchSize"])
+    Use_Sparse = event['UseSparse']
+    sparse_embed_lambda = float(event["SparseLambda"])
     input_items = event["InputItems"]
     num_of_clients = len(input_items)
     batch_index = int(input_items[0]["BatchIndex"])
@@ -346,13 +525,13 @@ def lambda_handler(event, context):
     is_next_epoch = bool(input_items[0]["IsNextEpoch"])
     task_name = input_items[0]["TaskName"]
     shuffled_index_path = input_items[0]["ShuffledIndexPath"]
-
+    
     # Initialize object stored on S3 bucket
     s3_model_object = boto3.resource("s3").Object(
         s3_bucket, f"server/{task_name}-server-model.pt"
     )
     s3_optimizer_object = boto3.resource("s3").Object(
-        s3_bucket, f"server/{task_name}-optimizer.pt"
+        s3_bucket, f"server/{task_name}-optimizers"
     )
     s3_tr_pred_object = boto3.resource("s3").Object(
         s3_bucket, f"server/{task_name}-tr-pred.npy"
@@ -389,6 +568,7 @@ def lambda_handler(event, context):
     session = TrainingSession(
         task_name=task_name,
         num_of_clients=num_of_clients,
+        sparse_embed_lambda=sparse_embed_lambda,
         epoch_index=epoch_index,
         batch_index=batch_index,
         batch_size=batch_size,
@@ -400,6 +580,14 @@ def lambda_handler(event, context):
     )
 
     model = ServerModel(4 * num_of_clients, 1)
+    # Define encoder and decoder for embedding and gradient
+    if Use_Sparse == True:
+        emb_decoder = Decoder('emb_svfl16')
+        gradient_encoder = Encoder('gradient_svfl16')
+    else:
+        emb_decoder = Decoder('emb')
+        gradient_encoder = Encoder('gradient')
+        
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     if epoch_index != 0 or batch_index != 0:
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -435,6 +623,8 @@ def lambda_handler(event, context):
                     "TaskName": task_name,
                     "BatchIndex": batch_index,
                     "BatchCount": batch_count,
+                    'UseSparse': Use_Sparse,
+                    "SparseEmbedLambda":sparse_embed_lambda,
                     "VaBatchIndex": va_batch_index,
                     "VaBatchCount": va_batch_count,
                     "IsNextBatch": is_next_batch,
@@ -453,36 +643,38 @@ def lambda_handler(event, context):
     for input_item in input_items:
         client_id = input_item["MemberId"]
         url = S3Url(input_item["EmbedFile"])
-        embed = Embed(url=url)
+        embed = Embed(url=url,decoder = emb_decoder)
         server_trainer.set_embed(
             client_id=client_id,
             embed=embed,
         )
 
         gradient_object = boto3.resource("s3").Object(
-            s3_bucket, f"{url.prefix}{task_name}-gradient-{client_id}.npy"
+            s3_bucket, f"{url.prefix}{task_name}-gradient-{str(batch_count)}-{client_id}.npy"
         )
-        gradient_value = torch.FloatTensor(np.zeros(embed.value.shape))
-        gradient = Gradient(value=gradient_value, s3_object=gradient_object)
+        gradient_info = embed.decoded_result
+        gradient_info['ge'] = torch.FloatTensor(np.zeros(embed.value.shape))
+        gradient = Gradient(gradient_info=gradient_info, s3_object=gradient_object,encoder = gradient_encoder)
         server_trainer.set_gradient(client_id=client_id, gradient=gradient)
-
+        
     response = None
 
     # Training
     if phase == "Training":
         # Train model
         server_trainer.train()
-
         # Save parameters
         server_trainer.save_loss()
 
         server_trainer.save_tr_pred()
 
         gradient_files: Dict[str, str] = dict()
+        
         for input_item in input_items:
             client_id = input_item["MemberId"]
             url = server_trainer.save_gradient(client_id=client_id)
             gradient_files[client_id] = url.url
+            
 
         # Save model and optimizer
         server_trainer.save_model(s3_model_object)
@@ -498,8 +690,10 @@ def lambda_handler(event, context):
                     "TaskName": task_name,
                     "BatchIndex": batch_index,
                     "BatchCount": batch_count,
+                    'UseSparse': Use_Sparse,
                     "VaBatchIndex": va_batch_index,
                     "VaBatchCount": va_batch_count,
+                    "SparseEmbedLambda":sparse_embed_lambda,
                     "IsNextBatch": is_next_batch,
                     "IsNextVaBatch": is_next_va_batch,
                     "EpochIndex": epoch_index,
@@ -528,8 +722,10 @@ def lambda_handler(event, context):
                     "TaskName": task_name,
                     "BatchIndex": batch_index,
                     "BatchCount": batch_count,
+                    'UseSparse': Use_Sparse,
                     "VaBatchIndex": va_batch_index,
                     "VaBatchCount": va_batch_count,
+                    "SparseEmbedLambda":sparse_embed_lambda,
                     "IsNextBatch": is_next_batch,
                     "IsNextVaBatch": is_next_va_batch,
                     "EpochIndex": epoch_index,

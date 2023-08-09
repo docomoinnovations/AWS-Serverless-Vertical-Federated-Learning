@@ -69,6 +69,7 @@ States:
             QueueUrl.$: $.SqsUrl
             MessageBody:
               BatchSize: ${BatchSize}
+              UseSparse: $.UseSparse
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
               VaBatchIndex.$: $.VaBatchIndex
@@ -82,6 +83,7 @@ States:
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
               VFLBucket: ${VFLBucket}
+              
               Direction: N/A
               Phase: Save
           End: true
@@ -95,6 +97,8 @@ States:
         InputItems.$: $
         BatchSize: ${BatchSize}
         VFLBucket: ${VFLBucket}
+        SparseLambda: ${SparseLambda}
+        UseSparse: ${UseSparse}
         Phase: Save
     Next: NextEpoch?
   NextEpoch?:
