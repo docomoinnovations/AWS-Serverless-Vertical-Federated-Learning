@@ -16,6 +16,8 @@ Metadata:
           - BatchSize
           - EpochCount
           - Patience
+          - SparseLambda
+          - UseSparse
 
 Parameters:
   NumOfClients:
@@ -30,6 +32,12 @@ Parameters:
   Patience:
     Type: Number
     Default: 3
+  SparseLambda:
+    Type: Number
+    Default: 0.1
+  UseSparse:
+    Type: String
+    Default: 'True'
 
 Resources:
   FederatedLearningMainStateMachine:
@@ -50,6 +58,8 @@ Resources:
         VFLBucket: !Ref VFLBucket
         BatchSize: !Ref BatchSize
         EpochCount: !Ref EpochCount
+        SparseLambda: !Ref SparseLambda
+        UseSparse: !Ref UseSparse
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref ServerInitFunction
@@ -75,6 +85,8 @@ Resources:
         PrepareNextBatchFunctionArn: !GetAtt PrepareNextBatchFunction.Arn
         VFLBucket: !Ref VFLBucket
         BatchSize: !Ref BatchSize
+        SparseLambda: !Ref SparseLambda
+        UseSparse: !Ref UseSparse
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref ServerTrainingFunction
@@ -91,6 +103,8 @@ Resources:
         PrepareNextVaBatchFunctionArn: !GetAtt PrepareNextVaBatchFunction.Arn
         VFLBucket: !Ref VFLBucket
         BatchSize: !Ref BatchSize
+        SparseLambda: !Ref SparseLambda
+        UseSparse: !Ref UseSparse
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref ServerTrainingFunction

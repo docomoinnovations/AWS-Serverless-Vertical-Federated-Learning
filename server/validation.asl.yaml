@@ -14,6 +14,7 @@ States:
               BatchSize: ${BatchSize}
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
+              UseSparse: ${UseSparse}
               VaBatchIndex.$: $.VaBatchIndex
               VaBatchCount.$: $.VaBatchCount
               IsNextBatch.$: $.IsNextBatch
@@ -39,6 +40,8 @@ States:
         BatchSize: ${BatchSize}
         VFLBucket: ${VFLBucket}
         Phase: Validation
+        SparseLambda: ${SparseLambda}
+        UseSparse: ${UseSparse}
     Next: NextVaBatch?
   NextVaBatch?:
     Type: Choice
