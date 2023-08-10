@@ -83,7 +83,6 @@ States:
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
               VFLBucket: ${VFLBucket}
-              
               Direction: N/A
               Phase: Save
           End: true

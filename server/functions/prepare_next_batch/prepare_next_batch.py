@@ -14,19 +14,20 @@ def lambda_handler(event, context):
         is_next_epoch = bool(item["IsNextEpoch"])
         queue_url = item["SqsUrl"]
 
-
-        response.append({
-            "TaskName": task_name,
-            "BatchIndex": batch_index,
-            "BatchCount": batch_count,
-            "VaBatchIndex": va_batch_index,
-            "VaBatchCount": va_batch_count,
-            "IsNextBatch": is_next_batch,
-            "IsNextVaBatch": is_next_va_batch,
-            "EpochIndex": epoch_index,
-            "IsNextEpoch": is_next_epoch,
-            "ShuffledIndexPath": shuffled_index_path,
-            "SqsUrl": queue_url,
-        })
+        response.append(
+            {
+                "TaskName": task_name,
+                "BatchIndex": batch_index,
+                "BatchCount": batch_count,
+                "VaBatchIndex": va_batch_index,
+                "VaBatchCount": va_batch_count,
+                "IsNextBatch": is_next_batch,
+                "IsNextVaBatch": is_next_va_batch,
+                "EpochIndex": epoch_index,
+                "IsNextEpoch": is_next_epoch,
+                "ShuffledIndexPath": shuffled_index_path,
+                "SqsUrl": queue_url,
+            }
+        )
 
     return response
