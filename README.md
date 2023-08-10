@@ -1,4 +1,4 @@
- # Cloud Native Vertical Federated Learning on AWS
+# Cloud Native Vertical Federated Learning on AWS
 This project introduces a reference architecture and implementation of Vertical Federated Learning (VFL) on AWS. VFL is a flavor of Federated Learning (FL) which is a distributed machine learning (ML) technique. 
 
 Federated Learning (FL) addresses typical machine learning challenges like below:

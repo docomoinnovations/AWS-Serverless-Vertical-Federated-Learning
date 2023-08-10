@@ -175,7 +175,6 @@ def lambda_handler(event, context):
                 "IsNextVaBatch": 0 + 1 < va_batch_count,
                 "TaskName": task_name,
                 "ShuffledIndexPath": shuffled_index_path,
-                
             }
         )
 

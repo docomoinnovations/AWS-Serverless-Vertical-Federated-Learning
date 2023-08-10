@@ -5,10 +5,8 @@ from urllib.parse import urlparse
 import numpy as np
 import torch
 import torch.nn.functional as F
-import math
 import random
 import boto3
-import os
 
 client_configs = {
     "1": "config/1.json",
@@ -17,7 +15,6 @@ client_configs = {
     "4": "config/4.json",
 }
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 class S3Url:
     def __init__(self, url) -> None:
@@ -28,49 +25,52 @@ class S3Url:
         self.file_name = self.key.split("/")[-1]
         self.prefix = self.key[: -len(self.file_name)]
 
+
 class Encoder:
-    def __init__(self,encode_type)-> None:
+    def __init__(self, encode_type) -> None:
         self.encode_type = encode_type
-        
-    def encode(self,src_info):
-        if self.encode_type == 'emb_svfl16':
-            ec, pos = self.sparse_encode16(src_info['embed'], get_position=2)
+
+    def encode(self, src_info):
+        if self.encode_type == "emb_svfl16":
+            ec, pos = self.sparse_encode16(src_info["embed"], get_position=2)
             result = {
-                'ec' : ec,
-                'pos' : pos,
+                "ec": ec,
+                "pos": pos,
             }
             return result
-        if self.encode_type == 'emb':
+        if self.encode_type == "emb":
             result = {
-            'ec' : src_info['embed'],
+                "ec": src_info["embed"],
             }
             return result
-        if self.encode_type == 'gradient_svfl16':
-            gec = self.sparse_encode16(src_info['ge'], get_position=1, nz_pos=src_info['nz_pos'])
+        if self.encode_type == "gradient_svfl16":
+            gec = self.sparse_encode16(
+                src_info["ge"], get_position=1, nz_pos=src_info["nz_pos"]
+            )
             result = {
-            'gec': gec,
+                "gec": gec,
             }
             return result
-        if self.encode_type == 'gradient':
+        if self.encode_type == "gradient":
             result = {
-                'gec' : src_info['ge'],
+                "gec": src_info["ge"],
             }
             return result
-        
+
     def sparse_encode16(self, src, get_position=0, nz_pos=None, axis=1):
         # src (gpu, float32), nz_pos (cpu, bool)
         samples = src.shape[0]
-        dims    = src.shape[1]
+        dims = src.shape[1]
 
         # run-length compress by axis=1
-        if axis==1:
+        if axis == 1:
             dst = src.detach().cpu().t().reshape(-1)
         else:
             dst = src.detach().cpu().reshape(-1)
         length = len(dst)
 
         if nz_pos is None:
-            nz_pos = (dst!=0)
+            nz_pos = dst != 0
 
         non_zero_values = dst[nz_pos].to(torch.float16)
 
@@ -78,81 +78,84 @@ class Encoder:
         # Extract change points
         #######################
         nz_pos = nz_pos.char()
-        ind = torch.arange(0, length)#, dtype=torch.int16)
+        ind = torch.arange(0, length)  # , dtype=torch.int16)
 
         # none zero position
         nz_cp = nz_pos - torch.cat((torch.CharTensor([0]), nz_pos[0:-1]), 0)
-        nz_head = ind[nz_cp==1]
-        nz_tail = ind[nz_cp==-1]
+        nz_head = ind[nz_cp == 1]
+        nz_tail = ind[nz_cp == -1]
 
-        if get_position==0:
+        if get_position == 0:
             # Fully encode
             info = {
-                'samples': samples, #int
-                'dims': dims, #int
-                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
-                'nz_head': nz_head.to(torch.int16), # int16, tensor, 1d-array
-                'nz_tail': nz_tail.to(torch.int16), # int16, tensor, 1d-array
+                "samples": samples,  # int
+                "dims": dims,  # int
+                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
+                "nz_head": nz_head.to(torch.int16),  # int16, tensor, 1d-array
+                "nz_tail": nz_tail.to(torch.int16),  # int16, tensor, 1d-array
             }
             return info
-        elif get_position==1:
+        elif get_position == 1:
             # Without position
             info = {
-                'samples': samples, #int
-                'dims': dims, #int
-                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
+                "samples": samples,  # int
+                "dims": dims,  # int
+                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
             }
             return info
-        elif get_position==2:
+        elif get_position == 2:
             # Duplicate position
             info = {
-                'samples': samples, #int
-                'dims': dims, #int
-                'non_zero_values': non_zero_values, # float16, tensor, 1d-array
-                'nz_head': nz_head.to(torch.int16), # int16, tensor, 1d-array
-                'nz_tail': nz_tail.to(torch.int16), # int16, tensor, 1d-array
+                "samples": samples,  # int
+                "dims": dims,  # int
+                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
+                "nz_head": nz_head.to(torch.int16),  # int16, tensor, 1d-array
+                "nz_tail": nz_tail.to(torch.int16),  # int16, tensor, 1d-array
             }
             position = {
-                'nz_head': nz_head, # long, tensor, cpu, 1d-array
-                'nz_tail': nz_tail, # long, tensor, cpu, 1d-array
+                "nz_head": nz_head,  # long, tensor, cpu, 1d-array
+                "nz_tail": nz_tail,  # long, tensor, cpu, 1d-array
             }
             return info, position
-        
+
+
 class Decoder:
     def __init__(self, decode_type):
         self.decode_type = decode_type
-        
-    def decode(self,src_info):
+
+    def decode(self, src_info):
         result = {}
-        if self.decode_type == 'gradient_svfl16':
-            gradient,_ = self.sparse_decode16(src_info['ge'], set_position=src_info['pos'])
+        if self.decode_type == "gradient_svfl16":
+            gradient, _ = self.sparse_decode16(
+                src_info["ge"], set_position=src_info["pos"]
+            )
             return gradient
-        if self.decode_type == 'gradient':
-            return src_info['ge']
-        if self.decode_type == 'emb_svfl16':
-            value, nz_pos = self.sparse_decode16(info = src_info['e'])
+        if self.decode_type == "gradient":
+            return src_info["ge"]
+        if self.decode_type == "emb_svfl16":
+            value, nz_pos = self.sparse_decode16(info=src_info["e"])
             result = {
-                'value': value,
-                'nz_pos':nz_pos,
+                "value": value,
+                "nz_pos": nz_pos,
             }
             return result
-        if self.decode_type == 'emb':
+        if self.decode_type == "emb":
             result = {
-            'value': src_info['e'],
+                "value": src_info["e"],
             }
             return result
-        
-    def sparse_decode16(self,info, set_position=None):
+
+    def sparse_decode16(self, info, set_position=None):
         # Extract data
-        samples = info['samples']
-        dims    = info['dims']
-        length  = samples * dims # info['length']
+        samples = info["samples"]
+        dims = info["dims"]
+        length = samples * dims  # info['length']
         if set_position is None:
-            nz_head = info['nz_head'].long()
-            nz_tail = info['nz_tail'].long()
+            nz_head = info["nz_head"].long()
+            nz_tail = info["nz_tail"].long()
         else:
-            nz_head = set_position['nz_head']#.long()
-            nz_tail = set_position['nz_tail']#.long()
+            nz_head = set_position["nz_head"]  # .long()
+            nz_tail = set_position["nz_tail"]  # .long()
 
         nz_cp = torch.zeros(length, dtype=torch.int8)
 
@@ -162,12 +165,13 @@ class Decoder:
         nz_pos = torch.cumsum(nz_cp, dim=0).bool()
 
         dst = torch.zeros(length)
-        dst[nz_pos] = info['non_zero_values'].float()
+        dst[nz_pos] = info["non_zero_values"].float()
 
         dst = dst.reshape((dims, samples)).t().to()
 
         return dst, nz_pos
-        
+
+
 class Dataset:
     def __init__(self, client) -> None:
         self.tr_uid = torch.LongTensor(
@@ -188,26 +192,19 @@ class Dataset:
         self.va_xcols = self.tr_xcols
         self.tr_sample_count = len(self.tr_uid)
         self.va_sample_count = len(self.va_uid)
-        
-
-        
-        
-
-
-
-
 
 
 class Gradient:
-    def __init__(self, s3_object,decoder,src_info) -> None:
+    def __init__(self, s3_object, decoder, src_info) -> None:
         self.s3_object = s3_object
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f'{tmpdirname}/ge.pt'
+            file_path = f"{tmpdirname}/ge.pt"
             s3_object.download_file(file_path)
-            src_info['ge'] = torch.load(file_path)
+            src_info["ge"] = torch.load(file_path)
             ge = decoder.decode(src_info)
             self.value = ge
+
 
 seed = 42
 
@@ -224,18 +221,18 @@ class ClientModel(torch.nn.Module):
     def __init__(self, in_size, hidden_size):
         super(ClientModel, self).__init__()
         self.i2h = torch.nn.Linear(in_size, hidden_size, bias=False)
-        # Reproducability
+
         set_seed(seed)
         torch.nn.init.xavier_uniform_(self.i2h.weight.data)
-            
-                
+
     def forward(self, x):
         h = self.i2h(x)
         h = F.relu(h)
         return h
-    
+
     def save(self, file_path: str):
         torch.save(self.state_dict(), file_path)
+
 
 class VFLSQS:
     def __init__(self, name, region) -> None:
@@ -282,7 +279,7 @@ class ShuffledIndex:
     def update_if_not_set(self, uri: str):
         if self.index is None:
             self.update(uri=uri)
-        
+
 
 class ClientTrainer:
     def __init__(
@@ -302,32 +299,31 @@ class ClientTrainer:
         self.va_xcols = dataset.va_xcols
 
         self.shuffled_index = shuffled_index
-        
+
         self.model = model.to()
         self.best_model = model.to()
         self.optimizer = optimizer
         self.embed: torch.FloatTensor = None
         self.va_embed: torch.FloatTensor = None
-        self.encoded_result = None 
+        self.encoded_result = None
         self.va_encoded_result = None
 
-    def save_embed(self, s3_object,encoder) -> None:
+    def save_embed(self, s3_object, encoder) -> None:
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = f"{tmpdirname}/_emb.pt"
             src_info = {}
-            src_info['embed'] = self.embed.detach().cpu()
+            src_info["embed"] = self.embed.detach().cpu()
             self.encoded_result = encoder.encode(src_info)
-            torch.save(self.encoded_result['ec'],path)
+            torch.save(self.encoded_result["ec"], path)
             s3_object.upload_file(path)
-           
-   
-    def save_va_embed(self, s3_object,encoder) -> None:
+
+    def save_va_embed(self, s3_object, encoder) -> None:
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = f"{tmpdirname}/va_emb.pt"
             src_info = {}
-            src_info['embed'] = self.va_embed
+            src_info["embed"] = self.va_embed
             self.va_encoded_result = encoder.encode(src_info)
-            torch.save(self.va_encoded_result['ec'],path)
+            torch.save(self.va_encoded_result["ec"], path)
             s3_object.upload_file(path)
 
     def forward(self, batch_size, batch_index) -> str:
@@ -417,7 +413,6 @@ if __name__ == "__main__":
             server_region = message["StateMachine"].split(":")[3]
             phase = message["Phase"]
             s3_bucket = message["VFLBucket"]
-            
 
             if stf_client is None:
                 stf_client = boto3.client(
@@ -428,14 +423,14 @@ if __name__ == "__main__":
                 batch_index = int(message["BatchIndex"])
             except:
                 batch_index = -1
-            
-            
+
             s3_best_model_object = s3.Object(
                 s3_bucket,
                 f"model/{task_name}-client-model-{client_id}-best.pt",
             )
             s3_tr_embed_object = s3.Object(
-                s3_bucket, f"{iam_user_id}/{task_name}-tr-embed-{str(batch_index)}-{client_id}.npy"
+                s3_bucket,
+                f"{iam_user_id}/{task_name}-tr-embed-{str(batch_index)}-{client_id}.npy",
             )
             s3_va_embed_object = s3.Object(
                 s3_bucket, f"{iam_user_id}/{task_name}-va-embed-{client_id}.npy"
@@ -452,8 +447,8 @@ if __name__ == "__main__":
                 response.delete()
                 print("End training.")
                 break
-                
-            Use_Sparse = message['UseSparse']
+
+            Use_Sparse = message["UseSparse"]
             direction = message["Direction"]
             batch_size = int(message["BatchSize"])
             batch_index = int(message["BatchIndex"])
@@ -468,21 +463,20 @@ if __name__ == "__main__":
 
             output["TaskId"] = client_id.zfill(4) + str(batch_index).zfill(8)
             output["SqsUrl"] = vfl_sqs.url
-            
 
             print(f"Task Name: {task_name}")
             print(f"Phase: {phase}")
             print(f"Direction: {direction}")
             # Define encoder and decoder for embedding and gradient
             if Use_Sparse == True:
-                print('Use Sparse')
-                emb_encoder = Encoder('emb_svfl16')
-                gradient_decoder = Decoder('gradient_svfl16')
+                print("Use Sparse")
+                emb_encoder = Encoder("emb_svfl16")
+                gradient_decoder = Decoder("gradient_svfl16")
             else:
-                print('Regular')
-                emb_encoder = Encoder('emb')
-                gradient_decoder = Decoder('gradient')
-                
+                print("Regular")
+                emb_encoder = Encoder("emb")
+                gradient_decoder = Decoder("gradient")
+
             if phase == "Save":
                 print("Saving model...")
                 client_trainer.commit_model()
@@ -499,7 +493,7 @@ if __name__ == "__main__":
                     client_trainer.forward(
                         batch_index=batch_index, batch_size=batch_size
                     )
-                    client_trainer.save_embed(s3_tr_embed_object,encoder = emb_encoder)
+                    client_trainer.save_embed(s3_tr_embed_object, encoder=emb_encoder)
                     output[
                         "EmbedFile"
                     ] = f"s3://{s3_tr_embed_object.bucket_name}/{s3_tr_embed_object.key}"
@@ -508,14 +502,20 @@ if __name__ == "__main__":
                     s3_gradient_object = s3.Object(
                         gradient_url.bucket, gradient_url.key
                     )
-                    gradient = Gradient(s3_object=s3_gradient_object, decoder = gradient_decoder, src_info =  client_trainer.encoded_result)
+                    gradient = Gradient(
+                        s3_object=s3_gradient_object,
+                        decoder=gradient_decoder,
+                        src_info=client_trainer.encoded_result,
+                    )
                     client_trainer.backward(gradient=gradient)
 
             elif phase == "Validation":
                 client_trainer.validate(
                     batch_size=batch_size, va_batch_index=va_batch_index
                 )
-                client_trainer.save_va_embed(s3_object=s3_va_embed_object, encoder = emb_encoder)
+                client_trainer.save_va_embed(
+                    s3_object=s3_va_embed_object, encoder=emb_encoder
+                )
                 output[
                     "EmbedFile"
                 ] = f"s3://{s3_va_embed_object.bucket_name}/{s3_va_embed_object.key}"
