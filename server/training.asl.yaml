@@ -11,23 +11,26 @@ States:
           Parameters:
             QueueUrl.$: $.SqsUrl
             MessageBody:
-              BatchSize: ${BatchSize}
+              BatchSize.$: $.BatchSize
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
-              UseSparse: ${UseSparse}
-              VaBatchIndex.$: $.VaBatchIndex
-              VaBatchCount.$: $.VaBatchCount
+              Direction: Forward
+              EpochIndex.$: $.EpochIndex
+              EpochCount.$: $.EpochCount
               IsNextBatch.$: $.IsNextBatch
               IsNextVaBatch.$: $.IsNextVaBatch
               IsNextEpoch.$: $.IsNextEpoch
-              EpochIndex.$: $.EpochIndex
-              TaskName.$: $.TaskName
-              ShuffledIndexPath.$: $.ShuffledIndexPath
-              TaskToken.$: $$.Task.Token
-              StateMachine.$: $$.StateMachine.Id
-              VFLBucket: ${VFLBucket}
-              Direction: Forward
               Phase: Training
+              TaskName.$: $.TaskName
+              TaskToken.$: $$.Task.Token
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              SparseEncoding.$: $.SparseEncoding
+              SparseLambda.$: $.SparseLambda
+              StateMachine.$: $$.StateMachine.Id
+              TaskToken.$: $$.Task.Token
+              VaBatchIndex.$: $.VaBatchIndex
+              VaBatchCount.$: $.VaBatchCount
+              VFLBucket.$: $.VFLBucket
           End: true
     Next: ServerTraining
   ServerTraining:
@@ -37,11 +40,7 @@ States:
       FunctionName: ${ServerTrainingFunctionArn}
       Payload:
         InputItems.$: $
-        BatchSize: ${BatchSize}
         Phase: Training
-        VFLBucket: ${VFLBucket}
-        SparseLambda: ${SparseLambda}
-        UseSparse: ${UseSparse}
     Next: ClientBackward
   ClientBackward:
     Type: Map
@@ -55,8 +54,7 @@ States:
           Parameters:
             QueueUrl.$: $.SqsUrl
             MessageBody:
-              BatchSize: ${BatchSize}
-              UseSparse: ${UseSparse}
+              BatchSize.$: $.BatchSize
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
               VaBatchIndex.$: $.VaBatchIndex
@@ -64,13 +62,16 @@ States:
               IsNextBatch.$: $.IsNextBatch
               IsNextVaBatch.$: $.IsNextVaBatch
               IsNextEpoch.$: $.IsNextEpoch
+              EpochCount.$: $.EpochCount
               EpochIndex.$: $.EpochIndex
               TaskName.$: $.TaskName
               ShuffledIndexPath.$: $.ShuffledIndexPath
+              SparseEncoding.$: $.SparseEncoding
+              SparseLambda.$: $.SparseLambda
               GradientFile.$: $.GradientFile
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
-              VFLBucket: ${VFLBucket}
+              VFLBucket.$: $.VFLBucket
               Direction: Backward
               Phase: Training
           End: true

@@ -6,6 +6,7 @@ import tempfile
 import random
 import string
 import json
+from codec import SparseEncoder, SparseDecoder
 from local_training import (
     S3Url,
     ClientTrainer,
@@ -149,8 +150,15 @@ def test_dataset(client, uid, x, cols, va_uid, va_x):
 def gradient_test_params(request):
     shape = request.param["shape"]
     key = request.param["key"]
+    encode = request.param["encode"]
+
     gradient_num = np.random.rand(shape[0], shape[1])
-    gradient = torch.FloatTensor(gradient_num)
+    expected = torch.FloatTensor(gradient_num)
+    gradient = json.dumps(expected.tolist())
+
+    if encode:
+        encoder = SparseEncoder()
+        gradient = encoder.encode(expected).export_as_json()
 
     bucket = create_test_bucket()
     s3_object = boto3.resource("s3").Object(
@@ -159,13 +167,15 @@ def gradient_test_params(request):
     )
 
     with tempfile.TemporaryDirectory() as tmpdirname:
-        file_path = f"{tmpdirname}/gradient.npy"
-        np.save(file=file_path, arr=gradient_num, allow_pickle=False)
+        file_path = f"{tmpdirname}/gradient.json"
+        with open(file=file_path, mode="w") as f:
+            f.write(gradient)
         s3_object.upload_file(file_path)
 
     yield {
         "s3_object": s3_object,
-        "expected": gradient,
+        "expected": expected,
+        "encode": encode,
     }
 
     bucket.objects.all().delete()
@@ -177,11 +187,13 @@ def gradient_test_params(request):
     [
         {
             "shape": (9304, 4),
-            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.json",
+            "encode": False,
         },
         {
             "shape": (3257, 4),
-            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.npy",
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.json",
+            "encode": True,
         },
     ],
     indirect=True,
@@ -189,8 +201,13 @@ def gradient_test_params(request):
 def test_gradient(gradient_test_params):
     s3_object = gradient_test_params["s3_object"]
     expected = gradient_test_params["expected"]
-    gradient = Gradient(s3_object=s3_object)
-    assert gradient.value.tolist() == expected.tolist()
+    encode = gradient_test_params["encode"]
+
+    decoder = None
+    if encode:
+        decoder = SparseDecoder()
+    gradient = Gradient(s3_object=s3_object, decoder=decoder)
+    assert torch.equal(expected.to(torch.float16), gradient.value.to(torch.float16))
 
 
 @pytest.fixture
@@ -353,6 +370,7 @@ def sqs():
         "IsNextBatch": True,
         "IsNextVaBatch": True,
         "EpochIndex": 3,
+        "EpochCount": 10,
         "IsNextEpoch": True,
         "ShuffledIndexPath": "s3://test-vfl/VFL-TAKS-YYYY-MM-DD-HH-mm-ss-shuffled-index.npy",
     }
@@ -395,5 +413,6 @@ def test_vfl_sqs(sqs):
     assert body["IsNextBatch"] == expected_body["IsNextBatch"]
     assert body["IsNextVaBatch"] == expected_body["IsNextVaBatch"]
     assert body["EpochIndex"] == expected_body["EpochIndex"]
+    assert body["EpochCount"] == expected_body["EpochCount"]
     assert body["IsNextEpoch"] == expected_body["IsNextEpoch"]
     assert body["ShuffledIndexPath"] == expected_body["ShuffledIndexPath"]

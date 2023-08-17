@@ -359,37 +359,110 @@ def test_set_shuffled_index(bucket):
 
 
 @pytest.fixture
-def event():
-    num_of_clients = 4
+def test_init_server_params(request):
+    default_parameters = request.param["Parameters"]["DefaultParameters"]
+    execution_parameters = request.param["Parameters"]["ExecutionParameters"]
+    expected = request.param["Expected"]
+
     s3_bucket_name = generate_random_name(20)
     s3_bucket = boto3.resource("s3").Bucket(s3_bucket_name)
     s3_bucket.create(CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
-    batch_size = 1024
-    epoch_count = 1000
+    expected["VFLBucket"] = s3_bucket_name
 
     yield {
-        "num_of_clients": num_of_clients,
-        "s3_bucket": s3_bucket_name,
-        "batch_size": batch_size,
-        "epoch_count": epoch_count,
+        "Event": {
+            "ExecutionParameters": execution_parameters,
+            "DefaultParameters": {
+                "sparse_encoding": default_parameters["sparse_encoding"],
+                "sparse_lambda": default_parameters["sparse_lambda"],
+                "num_of_clients": default_parameters["num_of_clients"],
+                "s3_bucket": s3_bucket_name,
+                "batch_size": default_parameters["batch_size"],
+                "epoch_count": default_parameters["epoch_count"],
+            },
+        },
+        "Expected": expected,
     }
 
     s3_bucket.objects.all().delete()
     s3_bucket.delete()
 
 
-def test_lambda_handler(event):
+@pytest.mark.parametrize(
+    ("test_init_server_params"),
+    [
+        {
+            "Parameters": {
+                "DefaultParameters": {
+                    "num_of_clients": 4,
+                    "batch_size": 1024,
+                    "epoch_count": 10,
+                    "sparse_encoding": True,
+                    "sparse_lambda": 0.1,
+                },
+                "ExecutionParameters": {},
+            },
+            "Expected": {
+                "NumClients": 4,
+                "BatchIndex": 0,
+                "BatchSize": 1024,
+                "EpochCount": 10,
+                "EpochIndex": 0,
+                "VaBatchIndex": 0,
+                "SparseEncoding": True,
+                "SparseLambda": 0.1,
+            },
+        },
+        {
+            "Parameters": {
+                "DefaultParameters": {
+                    "num_of_clients": 4,
+                    "batch_size": 1024,
+                    "epoch_count": 10,
+                    "sparse_encoding": True,
+                    "sparse_lambda": 0.1,
+                },
+                "ExecutionParameters": {
+                    "num_of_clients": 2,
+                    "batch_size": 10000,
+                    "epoch_count": 100,
+                    "sparse_encoding": False,
+                    "sparse_lambda": 0.5,
+                },
+            },
+            "Expected": {
+                "NumClients": 2,
+                "BatchIndex": 0,
+                "BatchSize": 10000,
+                "EpochCount": 100,
+                "EpochIndex": 0,
+                "VaBatchIndex": 0,
+                "SparseEncoding": False,
+                "SparseLambda": 0.5,
+            },
+        },
+    ],
+    indirect=True,
+)
+def test_lambda_handler(test_init_server_params):
+    event = test_init_server_params["Event"]
+    expected = test_init_server_params["Expected"]
     res = lambda_handler(event, {})
-    assert len(res) == event["num_of_clients"]
+    assert len(res) == expected["NumClients"]
     for client in res:
         assert "SqsUrl" in client
-        assert "BatchIndex" in client
+        assert client["BatchIndex"] == expected["BatchIndex"]
         assert "BatchCount" in client
-        assert "VaBatchIndex" in client
+        assert client["BatchSize"] == expected["BatchSize"]
+        assert client["EpochCount"] == expected["EpochCount"]
+        assert client["EpochIndex"] == expected["EpochIndex"]
         assert "VaBatchCount" in client
-        assert "EpochIndex" in client
+        assert client["VaBatchIndex"] == expected["VaBatchIndex"]
         assert "IsNextEpoch" in client
         assert "IsNextBatch" in client
         assert "IsNextVaBatch" in client
         assert "TaskName" in client
         assert "ShuffledIndexPath" in client
+        assert client["SparseEncoding"] == expected["SparseEncoding"]
+        assert client["SparseLambda"] == expected["SparseLambda"]
+        assert client["VFLBucket"] == expected["VFLBucket"]

@@ -6,10 +6,14 @@ States:
     Parameters:
       FunctionName: ${ServerInitFunctionArn}
       Payload:
-        num_of_clients: ${NumOfClients}
-        s3_bucket: ${VFLBucket}
-        batch_size: ${BatchSize}
-        epoch_count: ${EpochCount}
+        ExecutionParameters.$: $
+        DefaultParameters:
+          sparse_encoding: ${SparseEncoding}
+          sparse_lambda: ${SparseLambda}
+          num_of_clients: ${NumOfClients}
+          s3_bucket: ${VFLBucket}
+          batch_size: ${BatchSize}
+          epoch_count: ${EpochCount}
     OutputPath: $.Payload
     Next: Training
   Training:
@@ -68,8 +72,7 @@ States:
           Parameters:
             QueueUrl.$: $.SqsUrl
             MessageBody:
-              BatchSize: ${BatchSize}
-              UseSparse: $.UseSparse
+              BatchSize.$: $.BatchSize
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
               VaBatchIndex.$: $.VaBatchIndex
@@ -78,11 +81,14 @@ States:
               IsNextVaBatch.$: $.IsNextVaBatch
               IsNextEpoch.$: $.IsNextEpoch
               EpochIndex.$: $.EpochIndex
+              EpochCount.$: $.EpochCount
               TaskName.$: $.TaskName
               ShuffledIndexPath.$: $.ShuffledIndexPath
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
-              VFLBucket: ${VFLBucket}
+              VFLBucket.$: $.VFLBucket
+              SparseEncoding.$: $.SparseEncoding
+              SparseLambda.$: $.SparseLambda
               Direction: N/A
               Phase: Save
           End: true
@@ -94,10 +100,6 @@ States:
       FunctionName: ${ServerTrainingFunctionArn}
       Payload:
         InputItems.$: $
-        BatchSize: ${BatchSize}
-        VFLBucket: ${VFLBucket}
-        SparseLambda: ${SparseLambda}
-        UseSparse: ${UseSparse}
         Phase: Save
     Next: NextEpoch?
   NextEpoch?:
@@ -132,7 +134,17 @@ States:
               TaskName.$: $.TaskName
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
-              VFLBucket: ${VFLBucket}
+              EpochCount.$: $.EpochCount
+              EpochIndex.$: $.EpochIndex
+              VFLBucket.$: $.VFLBucket
+              BatchSize.$: $.BatchSize
+              BatchIndex.$: $.BatchIndex
+              BatchCount.$: $.BatchCount
+              VaBatchCount.$: $.VaBatchCount
+              VaBatchIndex.$: $.VaBatchIndex
+              ShuffledIndexPath.$: $.ShuffledIndexPath
+              SparseEncoding.$: $.SparseEncoding
+              SparseLambda.$: $.SparseLambda
               Direction: Forward
               Phase: End
           End: true
@@ -142,11 +154,5 @@ States:
     Resource: arn:aws:states:::lambda:invoke
     Parameters:
       FunctionName: ${EndTrainingFunctionArn}
-      Payload:
-        InputItems.$: $
-        VFLBucket: ${VFLBucket}
-        NumOfClients: ${NumOfClients}
-        BatchSize: ${BatchSize}
-        EpochCount: ${EpochCount}
-        Patience: ${Patience}
+      Payload.$: $
     End: true

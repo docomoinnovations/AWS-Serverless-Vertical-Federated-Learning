@@ -11,21 +11,23 @@ States:
           Parameters:
             QueueUrl.$: $.SqsUrl
             MessageBody:
-              BatchSize: ${BatchSize}
+              BatchSize.$: $.BatchSize
               BatchIndex.$: $.BatchIndex
               BatchCount.$: $.BatchCount
-              UseSparse: ${UseSparse}
+              SparseEncoding.$: $.SparseEncoding
+              SparseLambda.$: $.SparseLambda
               VaBatchIndex.$: $.VaBatchIndex
               VaBatchCount.$: $.VaBatchCount
               IsNextBatch.$: $.IsNextBatch
               IsNextVaBatch.$: $.IsNextVaBatch
               IsNextEpoch.$: $.IsNextEpoch
               EpochIndex.$: $.EpochIndex
+              EpochCount.$: $.EpochCount
               TaskName.$: $.TaskName
               ShuffledIndexPath.$: $.ShuffledIndexPath
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
-              VFLBucket: ${VFLBucket}
+              VFLBucket.$: $.VFLBucket
               Direction: Forward
               Phase: Validation
           End: true
@@ -37,11 +39,7 @@ States:
       FunctionName: ${ServerTrainingFunctionArn}
       Payload:
         InputItems.$: $
-        BatchSize: ${BatchSize}
-        VFLBucket: ${VFLBucket}
         Phase: Validation
-        SparseLambda: ${SparseLambda}
-        UseSparse: ${UseSparse}
     Next: NextVaBatch?
   NextVaBatch?:
     Type: Choice
