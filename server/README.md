@@ -41,6 +41,8 @@ The sample data preparation is required before deploying the server. If you have
     |BatchSize| The batch size for the training | 1024 |
     |EpochCount| The epoch count for the training | 10 |
     |Patience| The threshold of consective epoch count to stop the training if the model accuracy is not improved  | 3 |
+    |SparseLambda|The parameter to indicate how much sparsity is considered|0.1|
+    |SparseEncoding| Whether sparse encoding is enbaled|True|
 
     Then, you may be asked a couple of questions related to AWS SAM configurations and you may choose the preference.
     Please make sure that answer `Yes` if you're asked `Allow SAM CLI IAM role creation [Y/n]`.

@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 import random
 import boto3
+from typing import Optional
+from codec import SparseEncoder, SparseDecoder, SparseEncodedTensor, IDecoder, IEncoder
 
 client_configs = {
     "1": "config/1.json",
@@ -24,152 +26,6 @@ class S3Url:
         self.key = parsed_url.path.lstrip("/")
         self.file_name = self.key.split("/")[-1]
         self.prefix = self.key[: -len(self.file_name)]
-
-
-class Encoder:
-    def __init__(self, encode_type) -> None:
-        self.encode_type = encode_type
-
-    def encode(self, src_info):
-        if self.encode_type == "emb_svfl16":
-            ec, pos = self.sparse_encode16(src_info["embed"], get_position=2)
-            result = {
-                "ec": ec,
-                "pos": pos,
-            }
-            return result
-        if self.encode_type == "emb":
-            result = {
-                "ec": src_info["embed"],
-            }
-            return result
-        if self.encode_type == "gradient_svfl16":
-            gec = self.sparse_encode16(
-                src_info["ge"], get_position=1, nz_pos=src_info["nz_pos"]
-            )
-            result = {
-                "gec": gec,
-            }
-            return result
-        if self.encode_type == "gradient":
-            result = {
-                "gec": src_info["ge"],
-            }
-            return result
-
-    def sparse_encode16(self, src, get_position=0, nz_pos=None, axis=1):
-        # src (gpu, float32), nz_pos (cpu, bool)
-        samples = src.shape[0]
-        dims = src.shape[1]
-
-        # run-length compress by axis=1
-        if axis == 1:
-            dst = src.detach().cpu().t().reshape(-1)
-        else:
-            dst = src.detach().cpu().reshape(-1)
-        length = len(dst)
-
-        if nz_pos is None:
-            nz_pos = dst != 0
-
-        non_zero_values = dst[nz_pos].to(torch.float16)
-
-        #######################
-        # Extract change points
-        #######################
-        nz_pos = nz_pos.char()
-        ind = torch.arange(0, length)  # , dtype=torch.int16)
-
-        # none zero position
-        nz_cp = nz_pos - torch.cat((torch.CharTensor([0]), nz_pos[0:-1]), 0)
-        nz_head = ind[nz_cp == 1]
-        nz_tail = ind[nz_cp == -1]
-
-        if get_position == 0:
-            # Fully encode
-            info = {
-                "samples": samples,  # int
-                "dims": dims,  # int
-                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
-                "nz_head": nz_head.to(torch.int16),  # int16, tensor, 1d-array
-                "nz_tail": nz_tail.to(torch.int16),  # int16, tensor, 1d-array
-            }
-            return info
-        elif get_position == 1:
-            # Without position
-            info = {
-                "samples": samples,  # int
-                "dims": dims,  # int
-                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
-            }
-            return info
-        elif get_position == 2:
-            # Duplicate position
-            info = {
-                "samples": samples,  # int
-                "dims": dims,  # int
-                "non_zero_values": non_zero_values,  # float16, tensor, 1d-array
-                "nz_head": nz_head.to(torch.int16),  # int16, tensor, 1d-array
-                "nz_tail": nz_tail.to(torch.int16),  # int16, tensor, 1d-array
-            }
-            position = {
-                "nz_head": nz_head,  # long, tensor, cpu, 1d-array
-                "nz_tail": nz_tail,  # long, tensor, cpu, 1d-array
-            }
-            return info, position
-
-
-class Decoder:
-    def __init__(self, decode_type):
-        self.decode_type = decode_type
-
-    def decode(self, src_info):
-        result = {}
-        if self.decode_type == "gradient_svfl16":
-            gradient, _ = self.sparse_decode16(
-                src_info["ge"], set_position=src_info["pos"]
-            )
-            return gradient
-        if self.decode_type == "gradient":
-            return src_info["ge"]
-        if self.decode_type == "emb_svfl16":
-            value, nz_pos = self.sparse_decode16(info=src_info["e"])
-            result = {
-                "value": value,
-                "nz_pos": nz_pos,
-            }
-            return result
-        if self.decode_type == "emb":
-            result = {
-                "value": src_info["e"],
-            }
-            return result
-
-    def sparse_decode16(self, info, set_position=None):
-        # Extract data
-        samples = info["samples"]
-        dims = info["dims"]
-        length = samples * dims  # info['length']
-        if set_position is None:
-            nz_head = info["nz_head"].long()
-            nz_tail = info["nz_tail"].long()
-        else:
-            nz_head = set_position["nz_head"]  # .long()
-            nz_tail = set_position["nz_tail"]  # .long()
-
-        nz_cp = torch.zeros(length, dtype=torch.int8)
-
-        nz_cp[nz_head] = 1
-        nz_cp[nz_tail] = -1
-
-        nz_pos = torch.cumsum(nz_cp, dim=0).bool()
-
-        dst = torch.zeros(length)
-        dst[nz_pos] = info["non_zero_values"].float()
-
-        dst = dst.reshape((dims, samples)).t().to()
-
-        return dst, nz_pos
 
 
 class Dataset:
@@ -195,15 +51,20 @@ class Dataset:
 
 
 class Gradient:
-    def __init__(self, s3_object, decoder, src_info) -> None:
+    def __init__(self, s3_object, decoder: Optional[IDecoder] = None) -> None:
         self.s3_object = s3_object
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/ge.pt"
-            s3_object.download_file(file_path)
-            src_info["ge"] = torch.load(file_path)
-            ge = decoder.decode(src_info)
-            self.value = ge
+            path = f"{tmpdirname}/gradient.json"
+            s3_object.download_file(path)
+            gradient = None
+            with open(file=path, mode="r") as f:
+                gradient = json.load(f)
+            if decoder:
+                encoded_gradient = SparseEncodedTensor(gradient)
+                self.value = decoder.decode(encoded_gradient)
+            else:
+                self.value = torch.Tensor(gradient)
 
 
 seed = 42
@@ -308,22 +169,32 @@ class ClientTrainer:
         self.encoded_result = None
         self.va_encoded_result = None
 
-    def save_embed(self, s3_object, encoder) -> None:
+    def save_embed(self, s3_object, encoder: Optional[IEncoder] = None) -> None:
+        embed = self.embed
+        if encoder:
+            embed = encoder.encode(embed).export_as_json()
+        else:
+            embed = json.dumps(embed.tolist())
+
         with tempfile.TemporaryDirectory() as tmpdirname:
-            path = f"{tmpdirname}/_emb.pt"
-            src_info = {}
-            src_info["embed"] = self.embed.detach().cpu()
-            self.encoded_result = encoder.encode(src_info)
-            torch.save(self.encoded_result["ec"], path)
+            path = f"{tmpdirname}/embed.json"
+            with open(file=path, mode="w") as f:
+                f.write(embed)
+            # torch.save(embed, path)
             s3_object.upload_file(path)
 
-    def save_va_embed(self, s3_object, encoder) -> None:
+    def save_va_embed(self, s3_object, encoder: Optional[IEncoder] = None) -> None:
+        va_embed = self.va_embed
+        if encoder:
+            va_embed = encoder.encode(va_embed).export_as_json()
+        else:
+            va_embed = json.dumps(va_embed.tolist())
+
         with tempfile.TemporaryDirectory() as tmpdirname:
-            path = f"{tmpdirname}/va_emb.pt"
-            src_info = {}
-            src_info["embed"] = self.va_embed
-            self.va_encoded_result = encoder.encode(src_info)
-            torch.save(self.va_encoded_result["ec"], path)
+            path = f"{tmpdirname}/va_embed.json"
+            with open(file=path, mode="w") as f:
+                f.write(va_embed)
+            # torch.save(va_embed, path)
             s3_object.upload_file(path)
 
     def forward(self, batch_size, batch_index) -> str:
@@ -412,17 +283,16 @@ if __name__ == "__main__":
             task_token = message["TaskToken"]
             server_region = message["StateMachine"].split(":")[3]
             phase = message["Phase"]
+            batch_size = message["BatchSize"]
             s3_bucket = message["VFLBucket"]
+            sparse_encoding = bool(message["SparseEncoding"])
+            sparse_lambda = message["SparseLambda"]
 
             if stf_client is None:
                 stf_client = boto3.client(
                     "stepfunctions",
                     region_name=server_region,
                 )
-            try:
-                batch_index = int(message["BatchIndex"])
-            except:
-                batch_index = -1
 
             s3_best_model_object = s3.Object(
                 s3_bucket,
@@ -430,10 +300,11 @@ if __name__ == "__main__":
             )
             s3_tr_embed_object = s3.Object(
                 s3_bucket,
-                f"{iam_user_id}/{task_name}-tr-embed-{str(batch_index)}-{client_id}.npy",
+                f"{iam_user_id}/{task_name}-tr-embed-{client_id}.json",
             )
             s3_va_embed_object = s3.Object(
-                s3_bucket, f"{iam_user_id}/{task_name}-va-embed-{client_id}.npy"
+                s3_bucket,
+                f"{iam_user_id}/{task_name}-va-embed-{client_id}.json",
             )
 
             if phase == "End":
@@ -448,7 +319,6 @@ if __name__ == "__main__":
                 print("End training.")
                 break
 
-            Use_Sparse = message["UseSparse"]
             direction = message["Direction"]
             batch_size = int(message["BatchSize"])
             batch_index = int(message["BatchIndex"])
@@ -467,15 +337,16 @@ if __name__ == "__main__":
             print(f"Task Name: {task_name}")
             print(f"Phase: {phase}")
             print(f"Direction: {direction}")
+
             # Define encoder and decoder for embedding and gradient
-            if Use_Sparse == True:
-                print("Use Sparse")
-                emb_encoder = Encoder("emb_svfl16")
-                gradient_decoder = Decoder("gradient_svfl16")
+            encoder = None
+            decoder = None
+            if sparse_encoding:
+                print("Sparse Encoding: Enabled")
+                encoder = SparseEncoder()
+                decoder = SparseDecoder()
             else:
-                print("Regular")
-                emb_encoder = Encoder("emb")
-                gradient_decoder = Decoder("gradient")
+                print("Sparse Encoding: Disabled")
 
             if phase == "Save":
                 print("Saving model...")
@@ -493,7 +364,7 @@ if __name__ == "__main__":
                     client_trainer.forward(
                         batch_index=batch_index, batch_size=batch_size
                     )
-                    client_trainer.save_embed(s3_tr_embed_object, encoder=emb_encoder)
+                    client_trainer.save_embed(s3_tr_embed_object, encoder=encoder)
                     output[
                         "EmbedFile"
                     ] = f"s3://{s3_tr_embed_object.bucket_name}/{s3_tr_embed_object.key}"
@@ -504,8 +375,7 @@ if __name__ == "__main__":
                     )
                     gradient = Gradient(
                         s3_object=s3_gradient_object,
-                        decoder=gradient_decoder,
-                        src_info=client_trainer.encoded_result,
+                        decoder=decoder,
                     )
                     client_trainer.backward(gradient=gradient)
 
@@ -514,7 +384,8 @@ if __name__ == "__main__":
                     batch_size=batch_size, va_batch_index=va_batch_index
                 )
                 client_trainer.save_va_embed(
-                    s3_object=s3_va_embed_object, encoder=emb_encoder
+                    s3_object=s3_va_embed_object,
+                    encoder=encoder,
                 )
                 output[
                     "EmbedFile"

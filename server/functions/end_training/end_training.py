@@ -1,16 +1,10 @@
 def lambda_handler(event, context):
-    vfl_bucket = event["VFLBucket"]
-    input_items = event["InputItems"]
-    num_of_clients = event["NumOfClients"]
-    batch_size = event["BatchSize"]
-    epoch_count = event["EpochCount"]
-    patience = event["Patience"]
-
     return {
-        "TaskName": input_items[0]["TaskName"],
-        "NumOfClients": num_of_clients,
-        "BatchSize": batch_size,
-        "EpochCount": epoch_count,
-        "Patience": patience,
-        "VFLBucket": vfl_bucket,
+        "TaskName": event[0]["TaskName"],
+        "NumOfClients": len(event),
+        "BatchSize": event[0]["BatchSize"],
+        "EpochCount": event[0]["EpochCount"],
+        "VFLBucket": event[0]["VFLBucket"],
+        "SparseEncoding": event[0]["SparseEncoding"],
+        "SparseLambda": event[0]["SparseLambda"],
     }

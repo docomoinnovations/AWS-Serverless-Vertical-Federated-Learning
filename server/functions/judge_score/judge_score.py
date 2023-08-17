@@ -42,21 +42,25 @@ def save_score(score, s3_bucket, key):
 def lambda_handler(event, context):
     print(event)
 
-    s3_bucket = event["VFLBucket"]
     patience = event["Patience"]
     items = event["InputItems"]
 
     task_name = items[0]["TaskName"]
     batch_index = items[0]["BatchIndex"]
+    batch_size = items[0]["BatchSize"]
     va_batch_index = items[0]["VaBatchIndex"]
     batch_count = int(items[0]["BatchCount"])
     va_batch_count = int(items[0]["VaBatchCount"])
     shuffled_index_path = items[0]["ShuffledIndexPath"]
     epoch_index = int(items[0]["EpochIndex"])
+    epoch_count = int(items[0]["EpochCount"])
+    sparse_encoding = bool(items[0]["SparseEncoding"])
+    sparse_lambda = float(items[0]["SparseLambda"])
     is_next_batch = bool(items[0]["IsNextBatch"])
     is_next_va_batch = bool(items[0]["IsNextVaBatch"])
     is_next_epoch = bool(items[0]["IsNextEpoch"])
     va_auc = float(items[0]["VaAuc"])
+    s3_bucket = items[0]["VFLBucket"]
 
     is_best_score = False
     key = f"server/{task_name}-score.json"
@@ -86,15 +90,20 @@ def lambda_handler(event, context):
                 "TaskName": task_name,
                 "BatchIndex": batch_index,
                 "BatchCount": batch_count,
+                "BatchSize": batch_size,
                 "VaBatchIndex": va_batch_index,
                 "VaBatchCount": va_batch_count,
                 "IsNextBatch": is_next_batch,
                 "IsNextVaBatch": is_next_va_batch,
                 "EpochIndex": epoch_index,
+                "EpochCount": epoch_count,
+                "SparseEncoding": sparse_encoding,
+                "SparseLambda": sparse_lambda,
                 "IsNextEpoch": is_next_epoch,
                 "ShuffledIndexPath": shuffled_index_path,
                 "IsBestScore": is_best_score,
                 "SqsUrl": sqs_url,
+                "VFLBucket": s3_bucket,
             }
         )
 

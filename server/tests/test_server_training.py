@@ -17,6 +17,10 @@ from functions.server_training.server_training import (
     Gradient,
     Loss,
     Prediction,
+    SparseDecoder,
+    SparseEncoder,
+    SparseEncodedTensor,
+    SparseOptions,
 )
 from functions.init_server.serverinit import set_shuffled_index
 
@@ -169,6 +173,178 @@ def test_shuffled_index(shuffled_index_url: S3Url):
         assert shuffled_index.index.tolist() == donwloaded_shuffled_index.tolist()
 
 
+@pytest.mark.parametrize(
+    ("encoded_embed"),
+    [
+        {
+            "samples": random.randint(1, 100),
+            "dims": random.randint(1, 100),
+            "non_zero_values": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ),
+            "nz_head": torch.randn(random.randint(1, 100), random.randint(1, 100)),
+            "nz_tail": torch.randn(random.randint(1, 100), random.randint(1, 100)),
+        },
+        {
+            "samples": random.randint(1, 100),
+            "dims": random.randint(1, 100),
+            "non_zero_values": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ),
+            "nz_head": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ).long(),
+            "nz_tail": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ).long(),
+        },
+        {
+            "samples": random.randint(1, 100),
+            "dims": random.randint(1, 100),
+            "non_zero_values": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ),
+            "nz_head": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ).tolist(),
+            "nz_tail": torch.randn(
+                random.randint(1, 100), random.randint(1, 100)
+            ).tolist(),
+        },
+    ],
+)
+def test_sparse_encoded_tensor(encoded_embed):
+    sparse_encoded_tensor = SparseEncodedTensor(encoded_embed)
+    assert sparse_encoded_tensor.samples == encoded_embed["samples"]
+    assert sparse_encoded_tensor.dims == encoded_embed["dims"]
+
+    non_zero_values = encoded_embed["non_zero_values"]
+    if type(non_zero_values) is list:
+        non_zero_values = torch.Tensor(non_zero_values)
+
+    assert torch.equal(sparse_encoded_tensor.non_zero_values, non_zero_values)
+
+    nz_head = encoded_embed["nz_head"]
+    if type(nz_head) is not torch.Tensor:
+        nz_head = torch.Tensor(nz_head).long()
+    else:
+        nz_head = nz_head.long()
+
+    assert torch.equal(sparse_encoded_tensor.nz_head, nz_head)
+
+    nz_tail = encoded_embed["nz_tail"]
+    if type(nz_tail) is not torch.Tensor:
+        nz_tail = torch.Tensor(nz_tail).long()
+    else:
+        nz_tail = nz_tail.long()
+
+    assert torch.equal(sparse_encoded_tensor.nz_tail, nz_tail)
+
+
+def test_init_codec():
+    assert SparseEncoder()
+    assert SparseDecoder()
+
+
+@pytest.mark.parametrize(
+    ("tensor"),
+    [
+        torch.ones(1024, 1024),
+        torch.zeros(1024, 1024),
+        torch.randn(1024, 1024),
+    ],
+)
+def test_encode(tensor):
+    samples = tensor.shape[0]
+    dims = tensor.shape[1]
+
+    dst = tensor.detach().cpu().t().reshape(-1)
+    length = len(dst)
+    nz_pos = dst != 0
+    non_zero_values = dst[nz_pos].to(torch.float16)
+
+    nz_pos = nz_pos.char()
+    ind = torch.arange(0, length)
+
+    nz_cp = nz_pos - torch.cat((torch.CharTensor([0]), nz_pos[0:-1]), 0)
+    nz_head = ind[nz_cp == 1]
+    nz_tail = ind[nz_cp == -1]
+
+    expected = {
+        "samples": samples,
+        "dims": dims,
+        "non_zero_values": non_zero_values,
+        "nz_head": nz_head,
+        "nz_tail": nz_tail,
+    }
+
+    encoder = SparseEncoder()
+    sparse_embed = encoder.encode(tensor)
+
+    assert expected["samples"] == sparse_embed.samples
+    assert expected["dims"] == sparse_embed.dims
+    assert torch.equal(expected["non_zero_values"], sparse_embed.non_zero_values)
+    assert torch.equal(expected["nz_head"], sparse_embed.nz_head)
+    assert torch.equal(expected["nz_tail"], sparse_embed.nz_tail)
+
+    exported_sparse_embed = sparse_embed.export()
+
+    assert expected["samples"] == exported_sparse_embed["samples"]
+    assert expected["dims"] == exported_sparse_embed["dims"]
+    assert (
+        expected["non_zero_values"].tolist() == exported_sparse_embed["non_zero_values"]
+    )
+    assert expected["nz_head"].tolist() == exported_sparse_embed["nz_head"]
+    assert expected["nz_tail"].tolist() == exported_sparse_embed["nz_tail"]
+
+    assert json.dumps(exported_sparse_embed)
+
+
+@pytest.mark.parametrize(
+    ("tensor"),
+    [
+        torch.ones(1024, 1024),
+        torch.zeros(1024, 1024),
+        torch.randn(1024, 1024),
+        torch.cat(
+            (
+                torch.randn(1024, 1024),
+                torch.zeros(100, 1024),
+                torch.randn(200, 1024),
+            )
+        ),
+    ],
+)
+def test_decode(tensor: torch.FloatTensor):
+    encoder = SparseEncoder()
+    decoder = SparseDecoder()
+    sparse_tensor = encoder.encode(tensor)
+    decoded_tensor = decoder.decode(sparse_tensor)
+
+    assert torch.equal(
+        tensor.to(torch.float16),
+        decoded_tensor.to(torch.float16),
+    )
+
+    exported_sparse_tensor = sparse_tensor.export()
+    decoded_tensor = decoder.decode(SparseEncodedTensor(exported_sparse_tensor))
+
+    assert torch.equal(
+        tensor.to(torch.float16),
+        decoded_tensor.to(torch.float16),
+    )
+
+    json_exported_sparse_tensor = sparse_tensor.export_as_json()
+    decoded_tensor = decoder.decode(
+        SparseEncodedTensor(json.loads(json_exported_sparse_tensor))
+    )
+
+    assert torch.equal(
+        tensor.to(torch.float16),
+        decoded_tensor.to(torch.float16),
+    )
+
+
 @pytest.fixture
 def model_bucket():
     bucket = create_test_bucket()
@@ -196,8 +372,15 @@ def test_server_model(model_bucket):
 def embed_test_params(request):
     shape = request.param["shape"]
     key = request.param["key"]
+    encode = request.param["encode"]
+
     embed_num = np.random.rand(shape[0], shape[1])
-    embed = torch.FloatTensor(embed_num)
+    expected = torch.FloatTensor(embed_num)
+    embed = json.dumps(expected.tolist())
+
+    if encode:
+        encoder = SparseEncoder()
+        embed = encoder.encode(expected).export_as_json()
 
     bucket = create_test_bucket()
     s3_object = boto3.resource("s3").Object(
@@ -206,13 +389,15 @@ def embed_test_params(request):
     )
 
     with tempfile.TemporaryDirectory() as tmpdirname:
-        file_path = f"{tmpdirname}/embed.npy"
-        np.save(file=file_path, arr=embed_num, allow_pickle=False)
+        file_path = f"{tmpdirname}/embed.json"
+        with open(file=file_path, mode="w") as f:
+            f.write(embed)
         s3_object.upload_file(file_path)
 
     yield {
         "s3_url": S3Url(f"s3://{bucket.name}/{key}"),
-        "expected": embed,
+        "expected": expected,
+        "encode": encode,
     }
 
     bucket.objects.all().delete()
@@ -224,11 +409,13 @@ def embed_test_params(request):
     [
         {
             "shape": (9304, 4),
-            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-tr-embed-1.npy",
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-tr-embed-1.json",
+            "encode": False,
         },
         {
             "shape": (3257, 4),
-            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-va-embed-2.npy",
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-va-embed-2.json",
+            "encode": True,
         },
     ],
     indirect=True,
@@ -236,14 +423,21 @@ def embed_test_params(request):
 def test_embed(embed_test_params):
     s3_url = embed_test_params["s3_url"]
     expected = embed_test_params["expected"]
-    embed = Embed(s3_url)
-    assert embed.value.tolist() == expected.tolist()
+    encode = embed_test_params["encode"]
+
+    decoder = None
+    if encode:
+        decoder = SparseDecoder()
+    embed = Embed(url=s3_url, decoder=decoder)
+    assert torch.equal(expected.to(torch.float16), embed.value.to(torch.float16))
 
 
 @pytest.fixture
 def gradient_test_params(request):
     shape = request.param["shape"]
     key = request.param["key"]
+    encode = request.param["encode"]
+
     gradient_num = np.random.rand(shape[0], shape[1])
     gradient = torch.FloatTensor(gradient_num)
 
@@ -256,6 +450,7 @@ def gradient_test_params(request):
     yield {
         "value": gradient,
         "s3_object": s3_object,
+        "encode": encode,
     }
 
     bucket.objects.all().delete()
@@ -268,10 +463,12 @@ def gradient_test_params(request):
         {
             "shape": (9304, 4),
             "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
+            "encode": False,
         },
         {
             "shape": (3257, 4),
             "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.npy",
+            "encode": True,
         },
     ],
     indirect=True,
@@ -279,24 +476,37 @@ def gradient_test_params(request):
 def test_gradient(gradient_test_params):
     value = gradient_test_params["value"]
     s3_object = gradient_test_params["s3_object"]
+    encode = gradient_test_params["encode"]
 
-    gradient = Gradient(value=value, s3_object=s3_object)
+    encoder = None
+    if encode:
+        encoder = SparseEncoder()
+
+    gradient = Gradient(
+        value=value,
+        s3_object=s3_object,
+        encoder=encoder,
+    )
     assert gradient.value.tolist() == value.tolist()
 
     s3_url = gradient.save()
     assert s3_object.bucket_name == s3_url.bucket
     assert s3_object.key == s3_url.key
     with tempfile.TemporaryDirectory() as tmpdirname:
-        file_path = f"{tmpdirname}/gradient.npy"
+        file_path = f"{tmpdirname}/gradient.json"
         s3_object = boto3.resource("s3").Object(s3_url.bucket, s3_url.key)
         s3_object.download_file(file_path)
-        loaded_gradient = torch.FloatTensor(
-            np.load(
-                file=file_path,
-                allow_pickle=False,
-            )
-        )
-        assert loaded_gradient.tolist() == gradient.value.tolist()
+        loaded_gradient = None
+        with open(file=file_path, mode="r") as f:
+            loaded_gradient = json.load(f)
+
+        if encode:
+            sparse_encoded_gradient = SparseEncodedTensor(loaded_gradient)
+            decoder = SparseDecoder()
+            actual = decoder.decode(sparse_encoded_gradient)
+        else:
+            actual = torch.Tensor(loaded_gradient)
+        assert torch.equal(value.to(torch.float16), actual.to(torch.float16))
 
 
 @pytest.fixture
@@ -458,6 +668,7 @@ def shuffled_index() -> ShuffledIndex:
         "tr_pred",
         "va_pred",
         "loss",
+        "sparse_options",
     ),
     [
         (
@@ -470,6 +681,19 @@ def shuffled_index() -> ShuffledIndex:
             Prediction([29304, 1], s3_object=None),
             Prediction([3257, 1], s3_object=None),
             Loss(),
+            SparseOptions(enabled=True, sparse_lambda=0.1),
+        ),
+        (
+            "VFL-TASK-YYYY-MM-DD-HH-mm-ss",
+            4,
+            0,
+            0,
+            1024,
+            0,
+            Prediction([29304, 1], s3_object=None),
+            Prediction([3257, 1], s3_object=None),
+            Loss(),
+            SparseOptions(),
         ),
     ],
 )
@@ -484,6 +708,7 @@ def test_training_session(
     tr_pred,
     va_pred,
     loss,
+    sparse_options,
 ):
     session = TrainingSession(
         task_name=task_name,
@@ -496,6 +721,7 @@ def test_training_session(
         tr_pred=tr_pred,
         va_pred=va_pred,
         loss=loss,
+        sparse_options=sparse_options,
     )
     assert session.task_name == task_name
     assert session.num_of_clients == num_of_clients
@@ -508,6 +734,7 @@ def test_training_session(
     assert np.all(session.va_pred.value == va_pred.value)
     assert session.loss.total_tr_loss == loss.total_tr_loss
     assert session.loss.total_va_loss == loss.total_va_loss
+    assert session.sparse_options == sparse_options
 
 
 @pytest.mark.parametrize(
@@ -521,6 +748,7 @@ def test_training_session(
         "tr_pred",
         "va_pred",
         "loss",
+        "sparse_options",
     ),
     [
         (
@@ -533,6 +761,7 @@ def test_training_session(
             np.zeros([29304, 1]),
             np.zeros([3257, 1]),
             Loss(),
+            SparseOptions(),
         )
     ],
 )
@@ -547,6 +776,7 @@ def test_init_server_trainer(
     va_pred,
     loss,
     shuffled_index,
+    sparse_options,
 ):
     dataset_dir = "functions/server_training"
     label = f"{dataset_dir}/tr_y.npy"
@@ -566,6 +796,7 @@ def test_init_server_trainer(
         tr_pred=tr_pred,
         va_pred=va_pred,
         loss=loss,
+        sparse_options=sparse_options,
     )
     model = ServerModel(4 * num_of_clients, 1)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
@@ -602,3 +833,4 @@ def test_init_server_trainer(
     assert server_trainer.loss.total_va_loss == loss.total_va_loss
     assert len(server_trainer.model.state_dict()) == len(model.state_dict())
     assert len(server_trainer.optimizer.state_dict()) == len(optimizer.state_dict())
+    assert server_trainer.sparse_options == sparse_options

@@ -2,6 +2,7 @@ import math
 import torch
 import boto3
 import pandas
+import time
 import numpy as np
 import os
 import json
@@ -94,7 +95,16 @@ def sqs_purge(sqs_region, sqs_name):
     sqs_client = boto3.client("sqs", region_name=sqs_region)
     queue_url = sqs_client.get_queue_url(QueueName=sqs_name)["QueueUrl"]
 
-    response = sqs_client.purge_queue(QueueUrl=queue_url)
+    response = None
+    try_purge = True
+    while try_purge:
+        try:
+            response = sqs_client.purge_queue(QueueUrl=queue_url)
+            try_purge = False
+        except sqs_client.exceptions.PurgeQueueInProgress as e:
+            print(e)
+            time.sleep(60)
+
     return response
 
 
@@ -135,7 +145,40 @@ def lambda_handler(event, context):
     print(event)
     dir = os.path.dirname(os.path.abspath(__file__))
 
-    num_of_clients = int(event["num_of_clients"])
+    execution_parameters = event["ExecutionParameters"]
+    default_parameters = event["DefaultParameters"]
+
+    num_of_clients = (
+        int(execution_parameters["num_of_clients"])
+        if "num_of_clients" in execution_parameters
+        else default_parameters["num_of_clients"]
+    )
+    s3_bucket = (
+        execution_parameters["s3_bucket"]
+        if "s3_bucket" in execution_parameters
+        else default_parameters["s3_bucket"]
+    )
+    batch_size = (
+        int(execution_parameters["batch_size"])
+        if "batch_size" in execution_parameters
+        else int(default_parameters["batch_size"])
+    )
+    epoch_count = (
+        int(execution_parameters["epoch_count"])
+        if "epoch_count" in execution_parameters
+        else default_parameters["epoch_count"]
+    )
+    sparse_encoding = (
+        bool(execution_parameters["sparse_encoding"])
+        if "sparse_encoding" in execution_parameters
+        else bool(default_parameters["sparse_encoding"])
+    )
+    sparse_lambda = (
+        execution_parameters["sparse_lambda"]
+        if "sparse_lambda" in execution_parameters
+        else default_parameters["sparse_lambda"]
+    )
+
     queues_to_create = get_queues_to_create(num_of_clients)
     queues = []
 
@@ -146,10 +189,7 @@ def lambda_handler(event, context):
         queues.append(create_sqs(sqs_region=region, sqs_name=name, client_id=client_id))
         sqs_purge(region, name)
 
-    # S3 bucket to store shuffled index
-    s3_bucket = event["s3_bucket"]
     task_name = "VFL-Task-" + strftime("%Y-%m-%d-%H-%M-%S", gmtime())
-    batch_size = int(event["batch_size"])
     batch_count = get_batch_count(dataset=f"{dir}/tr_uid.npy", batch_size=batch_size)
     va_batch_count = get_batch_count(dataset=f"{dir}/va_uid.npy", batch_size=batch_size)
     shuffled_index_path = set_shuffled_index(
@@ -158,7 +198,6 @@ def lambda_handler(event, context):
         bucket=s3_bucket,
         prefix="common/",
     )
-    epoch_count = int(event["epoch_count"])
 
     response = []
     for queue in queues:
@@ -167,6 +206,8 @@ def lambda_handler(event, context):
                 "SqsUrl": queue,
                 "BatchIndex": 0,
                 "BatchCount": batch_count,
+                "BatchSize": batch_size,
+                "EpochCount": epoch_count,
                 "VaBatchIndex": 0,
                 "VaBatchCount": va_batch_count,
                 "EpochIndex": 0,
@@ -175,6 +216,9 @@ def lambda_handler(event, context):
                 "IsNextVaBatch": 0 + 1 < va_batch_count,
                 "TaskName": task_name,
                 "ShuffledIndexPath": shuffled_index_path,
+                "SparseEncoding": sparse_encoding,
+                "SparseLambda": sparse_lambda,
+                "VFLBucket": s3_bucket,
             }
         )
 

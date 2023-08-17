@@ -38,7 +38,7 @@ def get_training_attr(stack_name):
     num_of_clients = execution_output["Payload"]["NumOfClients"]
     epoch_count = execution_output["Payload"]["EpochCount"]
     batch_size = execution_output["Payload"]["BatchSize"]
-    patience = execution_output["Payload"]["Patience"]
+    # patience = execution_output["Payload"]["Patience"]
     s3_bucket = execution_output["Payload"]["VFLBucket"]
 
     return {
@@ -47,7 +47,7 @@ def get_training_attr(stack_name):
         "NumOfClients": num_of_clients,
         "EpochCount": epoch_count,
         "BatchSize": batch_size,
-        "Patience": patience,
+        # "Patience": patience,
         "StateMachineArn": state_machine_arn,
         "ExecutionArn": execution_arn,
         "S3Bucket": s3_bucket,
@@ -80,11 +80,10 @@ def set_seed(seed):
 class ClientModel(torch.nn.Module):
     def __init__(self, in_size, hidden_size):
         super(ClientModel, self).__init__()
-        self.i2h = torch.nn.Linear(in_size, hidden_size)
+        self.i2h = torch.nn.Linear(in_size, hidden_size, bias=False)
 
         set_seed(seed)
         torch.nn.init.xavier_uniform_(self.i2h.weight.data)
-        torch.nn.init.ones_(self.i2h.bias.data)
 
     def forward(self, x):
         h = self.i2h(x)
@@ -93,23 +92,35 @@ class ClientModel(torch.nn.Module):
 
 
 class ServerModel(torch.nn.Module):
-    def __init__(self, hidden_size, out_size):
+    def __init__(self, hidden_size, out_size, hidden_layer_count=1):
         super(ServerModel, self).__init__()
-        self.h2h = torch.nn.Linear(hidden_size, hidden_size // 2)
-        self.h2o = torch.nn.Linear(hidden_size // 2, out_size)
+        self.hidden_layer_count = hidden_layer_count
+        self.h2h, hidden_size = self._hidden_layers(hidden_size)
+        self.h2o = torch.nn.Linear(hidden_size, out_size)
 
-        set_seed(seed)
-        torch.nn.init.xavier_uniform_(self.h2h.weight.data)
-        torch.nn.init.ones_(self.h2h.bias.data)
         set_seed(seed)
         torch.nn.init.xavier_uniform_(self.h2o.weight.data)
         torch.nn.init.ones_(self.h2o.bias.data)
 
+    def _hidden_layers(self, hidden_size):
+        layers = []
+        for i in range(self.hidden_layer_count):
+            h2h = torch.nn.Linear(hidden_size, hidden_size // 2)
+            layers.append(h2h)
+
+            set_seed(seed)
+            torch.nn.init.xavier_uniform_(h2h.weight.data)
+            torch.nn.init.ones_(h2h.bias.data)
+
+            layers.append(torch.nn.ReLU())
+            hidden_size = hidden_size // 2
+
+        return torch.nn.Sequential(*layers), hidden_size
+
     def forward(self, h):
         h = self.h2h(h)
-        h = F.relu(h)
-        o = self.h2o(h)
-        return o
+        output = self.h2o(h)
+        return output
 
 
 argparser = ArgumentParser()
@@ -125,7 +136,7 @@ task_name = training_attr["TaskName"]
 epoch_count = training_attr["EpochCount"]
 batch_size = training_attr["BatchSize"]
 num_of_clients = training_attr["NumOfClients"]
-patience = training_attr["Patience"]
+# patience = training_attr["Patience"]
 total_time = training_attr["TotalTime"]
 state_machine_arn = training_attr["StateMachineArn"]
 execution_arn = training_attr["ExecutionArn"]
@@ -207,7 +218,7 @@ print(f"Total time:        {total_time:,}s")
 print(f"Number of clients: {num_of_clients:,}")
 print(f"Batch Size:        {batch_size:,}")
 print(f"Epoch:             {epoch_count:,}")
-print(f"Patience:          {patience:,}")
+# print(f"Patience:          {patience:,}")
 print(f"State Machine ARN: {state_machine_arn}")
 print(f"Execution ARN:     {execution_arn}")
 
