@@ -20,6 +20,7 @@ States:
               IsNextBatch.$: $.IsNextBatch
               IsNextVaBatch.$: $.IsNextVaBatch
               IsNextEpoch.$: $.IsNextEpoch
+              Patience.$: $.Patience
               Phase: Training
               TaskName.$: $.TaskName
               TaskToken.$: $$.Task.Token
@@ -65,6 +66,7 @@ States:
               EpochCount.$: $.EpochCount
               EpochIndex.$: $.EpochIndex
               TaskName.$: $.TaskName
+              Patience.$: $.Patience
               ShuffledIndexPath.$: $.ShuffledIndexPath
               SparseEncoding.$: $.SparseEncoding
               SparseLambda.$: $.SparseLambda

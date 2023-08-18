@@ -23,6 +23,7 @@ States:
               IsNextEpoch.$: $.IsNextEpoch
               EpochIndex.$: $.EpochIndex
               EpochCount.$: $.EpochCount
+              Patience.$: $.Patience
               TaskName.$: $.TaskName
               ShuffledIndexPath.$: $.ShuffledIndexPath
               TaskToken.$: $$.Task.Token

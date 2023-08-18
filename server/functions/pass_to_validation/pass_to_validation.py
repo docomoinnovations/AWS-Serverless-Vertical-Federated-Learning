@@ -8,6 +8,7 @@ def lambda_handler(event, context):
         batch_size = int(item["BatchSize"])
         epoch_index = int(item["EpochIndex"])
         epoch_count = int(item["EpochCount"])
+        patience = int(item["Patience"])
         sparse_encoding = bool(item["SparseEncoding"])
         sparse_lambda = float(item["SparseLambda"])
         va_batch_index = 0
@@ -31,6 +32,7 @@ def lambda_handler(event, context):
                 "IsNextVaBatch": is_next_va_batch,
                 "EpochIndex": epoch_index,
                 "EpochCount": epoch_count,
+                "Patience": patience,
                 "SparseEncoding": sparse_encoding,
                 "SparseLambda": sparse_lambda,
                 "IsNextEpoch": is_next_epoch,

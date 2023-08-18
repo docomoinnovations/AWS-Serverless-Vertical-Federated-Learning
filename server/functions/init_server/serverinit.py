@@ -168,6 +168,11 @@ def lambda_handler(event, context):
         if "epoch_count" in execution_parameters
         else default_parameters["epoch_count"]
     )
+    patience = (
+        int(execution_parameters["patience"])
+        if "patience" in execution_parameters
+        else default_parameters["patience"]
+    )
     sparse_encoding = (
         bool(execution_parameters["sparse_encoding"])
         if "sparse_encoding" in execution_parameters
@@ -214,6 +219,7 @@ def lambda_handler(event, context):
                 "IsNextEpoch": 0 + 1 < epoch_count,
                 "IsNextBatch": 0 + 1 < batch_count,
                 "IsNextVaBatch": 0 + 1 < va_batch_count,
+                "Patience": patience,
                 "TaskName": task_name,
                 "ShuffledIndexPath": shuffled_index_path,
                 "SparseEncoding": sparse_encoding,
