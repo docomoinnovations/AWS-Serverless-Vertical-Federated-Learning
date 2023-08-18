@@ -18,6 +18,19 @@ VFL consists of the server and multiple clients, which work together to train a 
 
 ![VFL architecture](_static/img/VFL%20architecture.png)
 
+## SparseVFL (Optional)
+As we can see from the introduction of VFL above, the server and clients exchange intermediate embedding and gradient data, which results in high communication cost. Besides general VFL mentioned above, we can also introduce SparseVFL algorithm as an optional method to further improve communication efficient and save training time. In both the forward and backward propagation, SparseVFL makes sparse embeddings and gradients based on the combination of ReLU activation, L1-norm of embedding vectors, masked-gradient, and run-length coding. And figure to demonstrate SparseVFL is below, 
+
+![VFL architecture](_static/img/sparsevfl.png)
+
+More details can be view in the public repository: https://github.com/docomoinnovations/SparseVFL and related paper:
+> **SparseVFL: Communication-Efficient Vertical Federated Learning Based on Sparsification of Embeddings and Gradients** <br/>
+> *Yoshitaka Inoue, Hiroki Moriya, Qiong Zhang, Kris Skrinak* <br/>
+> Paper: https://openreview.net/forum?id=BVH3-XCRoN3 <br/>
+> Accepted by: [KDD FL4Data-Mining '23: International Workshop on Federated Learning for Distributed Data Mining](https://fl4data-mining.github.io/)<br/>
+> Published on: August 7, 2023
+
+
 ## VFL architecture on AWS
 This is a reference implementation of VFL on AWS. The workflow on the server is managed by [AWS Step Functions](https://aws.amazon.com/step-functions/) state machine which orchestrates [AWS Lamda](https://aws.amazon.com/lambda/) functions and the steps of interaction with all clients. The server and each client communicate through Amazon SQS messages. Amazon S3 bucket works as an intermediary between the server and client for exchanging the object files required for building a model.  
 
