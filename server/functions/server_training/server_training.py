@@ -90,7 +90,7 @@ class SparseEncoder(IEncoder):
     def __init__(self) -> None:
         super().__init__()
 
-    def encode(self, tensor: torch.Tensor) -> SparseEncodedTensor:
+    def encode(self, tensor: torch.FloatTensor) -> SparseEncodedTensor:
         samples = tensor.shape[0]
         dims = tensor.shape[1]
 
@@ -192,13 +192,13 @@ class Embed:
                 encoded_embed = SparseEncodedTensor(embed)
                 self.value = decoder.decode(encoded_embed)
             else:
-                self.value = torch.Tensor(embed)
+                self.value = torch.FloatTensor(embed)
 
 
 class Gradient:
     def __init__(
         self,
-        value: torch.Tensor,
+        value: torch.FloatTensor,
         s3_object,
         encoder: Optional[IEncoder] = None,
     ) -> None:
@@ -430,18 +430,17 @@ class ServerTrainer:
         sparse_embed_loss = 0
         for client_id in self.client_ids:
             embed_tuple = (*embed_tuple, self.embeds[client_id].value)
+            self.embeds[client_id].value.requires_grad_(True)
             if self.sparse_options.enabled:
                 sparse_embed_loss = (
                     sparse_embed_loss
                     + torch.norm(self.embeds[client_id].value, p=1, dim=1).mean()
                 )
         embed = torch.cat(embed_tuple, 1)
-        embed.requires_grad_(True)
 
         pred_y = self.model(embed)
         loss = self.criterion(pred_y, batch_y)
 
-        ## L1-norm
         if self.sparse_options.enabled:
             loss = loss + self.sparse_options.sparse_lambda * (
                 sparse_embed_loss
@@ -449,10 +448,8 @@ class ServerTrainer:
         loss.backward()
         self.optimizer.step()
         self.loss.total_tr_loss += loss.item()
-        for i, client_id in enumerate(self.client_ids):
-            e_head = i * 4
-            e_tail = (i + 1) * 4
-            self.gradients[client_id].value = embed.grad[:, e_head:e_tail].cpu()
+        for client_id in self.client_ids:
+            self.gradients[client_id].value = self.embeds[client_id].value.grad.cpu()
 
         self.tr_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
