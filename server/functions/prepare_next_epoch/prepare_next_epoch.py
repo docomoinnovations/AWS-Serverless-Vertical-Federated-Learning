@@ -2,7 +2,7 @@ def lambda_handler(event, context):
     print(event)
 
     response = []
-    for item in event["InputItems"]:
+    for item in event:
         item["BatchIndex"] = 0
         item["VaBatchIndex"] = 0
         item["EpochIndex"] = int(item["EpochIndex"]) + 1

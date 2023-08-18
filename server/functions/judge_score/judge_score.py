@@ -42,8 +42,7 @@ def save_score(score, s3_bucket, key):
 def lambda_handler(event, context):
     print(event)
 
-    patience = event["Patience"]
-    items = event["InputItems"]
+    items = event
 
     task_name = items[0]["TaskName"]
     batch_index = items[0]["BatchIndex"]
@@ -54,6 +53,7 @@ def lambda_handler(event, context):
     shuffled_index_path = items[0]["ShuffledIndexPath"]
     epoch_index = int(items[0]["EpochIndex"])
     epoch_count = int(items[0]["EpochCount"])
+    patience = items[0]["Patience"]
     sparse_encoding = bool(items[0]["SparseEncoding"])
     sparse_lambda = float(items[0]["SparseLambda"])
     is_next_batch = bool(items[0]["IsNextBatch"])
@@ -97,6 +97,7 @@ def lambda_handler(event, context):
                 "IsNextVaBatch": is_next_va_batch,
                 "EpochIndex": epoch_index,
                 "EpochCount": epoch_count,
+                "Patience": patience,
                 "SparseEncoding": sparse_encoding,
                 "SparseLambda": sparse_lambda,
                 "IsNextEpoch": is_next_epoch,

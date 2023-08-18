@@ -38,7 +38,7 @@ def get_training_attr(stack_name):
     num_of_clients = execution_output["Payload"]["NumOfClients"]
     epoch_count = execution_output["Payload"]["EpochCount"]
     batch_size = execution_output["Payload"]["BatchSize"]
-    # patience = execution_output["Payload"]["Patience"]
+    patience = execution_output["Payload"]["Patience"]
     s3_bucket = execution_output["Payload"]["VFLBucket"]
 
     return {
@@ -47,7 +47,7 @@ def get_training_attr(stack_name):
         "NumOfClients": num_of_clients,
         "EpochCount": epoch_count,
         "BatchSize": batch_size,
-        # "Patience": patience,
+        "Patience": patience,
         "StateMachineArn": state_machine_arn,
         "ExecutionArn": execution_arn,
         "S3Bucket": s3_bucket,
@@ -136,7 +136,7 @@ task_name = training_attr["TaskName"]
 epoch_count = training_attr["EpochCount"]
 batch_size = training_attr["BatchSize"]
 num_of_clients = training_attr["NumOfClients"]
-# patience = training_attr["Patience"]
+patience = training_attr["Patience"]
 total_time = training_attr["TotalTime"]
 state_machine_arn = training_attr["StateMachineArn"]
 execution_arn = training_attr["ExecutionArn"]
@@ -218,7 +218,7 @@ print(f"Total time:        {total_time:,}s")
 print(f"Number of clients: {num_of_clients:,}")
 print(f"Batch Size:        {batch_size:,}")
 print(f"Epoch:             {epoch_count:,}")
-# print(f"Patience:          {patience:,}")
+print(f"Patience:          {patience:,}")
 print(f"State Machine ARN: {state_machine_arn}")
 print(f"Execution ARN:     {execution_arn}")
 

@@ -14,6 +14,7 @@ States:
           s3_bucket: ${VFLBucket}
           batch_size: ${BatchSize}
           epoch_count: ${EpochCount}
+          patience: ${Patience}
     OutputPath: $.Payload
     Next: Training
   Training:
@@ -48,10 +49,7 @@ States:
     Resource: arn:aws:states:::lambda:invoke
     Parameters:
       FunctionName: ${JudgeScoreFunctionArn}
-      Payload:
-        InputItems.$: $
-        VFLBucket: ${VFLBucket}
-        Patience: ${Patience}
+      Payload.$: $
     Next: BestScore?
   BestScore?:
     Type: Choice
@@ -83,6 +81,7 @@ States:
               EpochIndex.$: $.EpochIndex
               EpochCount.$: $.EpochCount
               TaskName.$: $.TaskName
+              Patience.$: $.Patience
               ShuffledIndexPath.$: $.ShuffledIndexPath
               TaskToken.$: $$.Task.Token
               StateMachine.$: $$.StateMachine.Id
@@ -115,9 +114,7 @@ States:
     Resource: arn:aws:states:::lambda:invoke
     Parameters:
       FunctionName: ${PrepareNextEpochFunctionArn}
-      Payload:
-        InputItems.$: $
-        EpochCount: ${EpochCount}
+      Payload.$: $
     OutputPath: $.Payload
     Next: Training
   TerminateTraining:
@@ -142,6 +139,7 @@ States:
               BatchCount.$: $.BatchCount
               VaBatchCount.$: $.VaBatchCount
               VaBatchIndex.$: $.VaBatchIndex
+              Patience.$: $.Patience
               ShuffledIndexPath.$: $.ShuffledIndexPath
               SparseEncoding.$: $.SparseEncoding
               SparseLambda.$: $.SparseLambda

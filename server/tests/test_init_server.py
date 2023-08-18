@@ -379,6 +379,7 @@ def test_init_server_params(request):
                 "s3_bucket": s3_bucket_name,
                 "batch_size": default_parameters["batch_size"],
                 "epoch_count": default_parameters["epoch_count"],
+                "patience": default_parameters["patience"],
             },
         },
         "Expected": expected,
@@ -399,6 +400,7 @@ def test_init_server_params(request):
                     "epoch_count": 10,
                     "sparse_encoding": True,
                     "sparse_lambda": 0.1,
+                    "patience": 3,
                 },
                 "ExecutionParameters": {},
             },
@@ -411,6 +413,7 @@ def test_init_server_params(request):
                 "VaBatchIndex": 0,
                 "SparseEncoding": True,
                 "SparseLambda": 0.1,
+                "Patience": 3,
             },
         },
         {
@@ -421,6 +424,7 @@ def test_init_server_params(request):
                     "epoch_count": 10,
                     "sparse_encoding": True,
                     "sparse_lambda": 0.1,
+                    "patience": 3,
                 },
                 "ExecutionParameters": {
                     "num_of_clients": 2,
@@ -428,6 +432,7 @@ def test_init_server_params(request):
                     "epoch_count": 100,
                     "sparse_encoding": False,
                     "sparse_lambda": 0.5,
+                    "patience": 2,
                 },
             },
             "Expected": {
@@ -439,6 +444,7 @@ def test_init_server_params(request):
                 "VaBatchIndex": 0,
                 "SparseEncoding": False,
                 "SparseLambda": 0.5,
+                "Patience": 2,
             },
         },
     ],
@@ -466,3 +472,4 @@ def test_lambda_handler(test_init_server_params):
         assert client["SparseEncoding"] == expected["SparseEncoding"]
         assert client["SparseLambda"] == expected["SparseLambda"]
         assert client["VFLBucket"] == expected["VFLBucket"]
+        assert client["Patience"] == expected["Patience"]

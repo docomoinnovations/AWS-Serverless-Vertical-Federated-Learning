@@ -505,6 +505,7 @@ def lambda_handler(event, context):
     is_next_epoch = bool(input_items[0]["IsNextEpoch"])
     task_name = input_items[0]["TaskName"]
     shuffled_index_path = input_items[0]["ShuffledIndexPath"]
+    patience = input_items[0]["Patience"]
     sparse_encoding = bool(input_items[0]["SparseEncoding"])
     sparse_lambda = float(input_items[0]["SparseLambda"])
     vfl_bucket = input_items[0]["VFLBucket"]
@@ -610,6 +611,7 @@ def lambda_handler(event, context):
                     "BatchSize": batch_size,
                     "EpochCount": epoch_count,
                     "EpochIndex": epoch_index,
+                    "Patience": patience,
                     "SparseEncoding": sparse_encoding,
                     "SparseLambda": sparse_lambda,
                     "VaBatchIndex": va_batch_index,
@@ -688,6 +690,7 @@ def lambda_handler(event, context):
                     "IsNextVaBatch": is_next_va_batch,
                     "IsNextEpoch": is_next_epoch,
                     "GradientFile": gradient_files[member_id],
+                    "Patience": patience,
                     "ShuffledIndexPath": shuffled_index_path,
                     "SqsUrl": queue_url,
                     "TrLoss": server_trainer.get_tr_loss(),
@@ -719,6 +722,7 @@ def lambda_handler(event, context):
                     "EpochIndex": epoch_index,
                     "VaBatchIndex": va_batch_index,
                     "VaBatchCount": va_batch_count,
+                    "Patience": patience,
                     "SparseEncoding": sparse_encoding,
                     "SparseLambda": sparse_lambda,
                     "IsNextBatch": is_next_batch,
