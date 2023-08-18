@@ -180,7 +180,6 @@ class ClientTrainer:
             path = f"{tmpdirname}/embed.json"
             with open(file=path, mode="w") as f:
                 f.write(embed)
-            # torch.save(embed, path)
             s3_object.upload_file(path)
 
     def save_va_embed(self, s3_object, encoder: Optional[IEncoder] = None) -> None:
@@ -194,7 +193,6 @@ class ClientTrainer:
             path = f"{tmpdirname}/va_embed.json"
             with open(file=path, mode="w") as f:
                 f.write(va_embed)
-            # torch.save(va_embed, path)
             s3_object.upload_file(path)
 
     def forward(self, batch_size, batch_index) -> str:
