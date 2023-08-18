@@ -59,7 +59,7 @@ class SparseEncoder(IEncoder):
     def __init__(self) -> None:
         super().__init__()
 
-    def encode(self, tensor: torch.Tensor) -> SparseEncodedTensor:
+    def encode(self, tensor: torch.FloatTensor) -> SparseEncodedTensor:
         samples = tensor.shape[0]
         dims = tensor.shape[1]
 
