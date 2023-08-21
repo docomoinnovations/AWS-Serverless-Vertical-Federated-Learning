@@ -13,8 +13,6 @@ from functions.server_training.server_training import (
     ServerModel,
     TrainingSession,
     DataSet,
-    Embed,
-    Gradient,
     Loss,
     Prediction,
     SparseDecoder,
@@ -173,47 +171,51 @@ def test_shuffled_index(shuffled_index_url: S3Url):
         assert shuffled_index.index.tolist() == donwloaded_shuffled_index.tolist()
 
 
+@pytest.fixture
+def test_encoded_embed_params(request):
+    samples = request.param["samples"]
+    dims = request.param["dims"]
+    length = samples * dims
+
+    embed = torch.randn(samples, dims)
+    dst = embed.detach().cpu().reshape(-1)
+    nz_pos = (torch.FloatTensor(length).uniform_() > 0.8).bool()
+
+    non_zero_values = dst[nz_pos].to(torch.float16)
+
+    nz_pos_char = nz_pos.char()
+    idx = torch.arange(0, length)
+
+    nz_cp = nz_pos_char - torch.cat((torch.CharTensor([0]), nz_pos_char[0:-1]), 0)
+    nz_head = idx[nz_cp == 1]
+    nz_tail = idx[nz_cp == -1]
+
+    return {
+        "encoded_embed": {
+            "samples": samples,
+            "dims": dims,
+            "non_zero_values": non_zero_values,
+            "nz_head": nz_head,
+            "nz_tail": nz_tail,
+        },
+        "nz_pos": nz_pos,
+    }
+
+
 @pytest.mark.parametrize(
-    ("encoded_embed"),
+    ("test_encoded_embed_params"),
     [
         {
             "samples": random.randint(1, 100),
             "dims": random.randint(1, 100),
-            "non_zero_values": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ),
-            "nz_head": torch.randn(random.randint(1, 100), random.randint(1, 100)),
-            "nz_tail": torch.randn(random.randint(1, 100), random.randint(1, 100)),
-        },
-        {
-            "samples": random.randint(1, 100),
-            "dims": random.randint(1, 100),
-            "non_zero_values": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ),
-            "nz_head": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ).long(),
-            "nz_tail": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ).long(),
-        },
-        {
-            "samples": random.randint(1, 100),
-            "dims": random.randint(1, 100),
-            "non_zero_values": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ),
-            "nz_head": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ).tolist(),
-            "nz_tail": torch.randn(
-                random.randint(1, 100), random.randint(1, 100)
-            ).tolist(),
         },
     ],
+    indirect=True,
 )
-def test_sparse_encoded_tensor(encoded_embed):
+def test_sparse_encoded_tensor(test_encoded_embed_params):
+    encoded_embed = test_encoded_embed_params["encoded_embed"]
+    nz_pos = test_encoded_embed_params["nz_pos"]
+
     sparse_encoded_tensor = SparseEncodedTensor(encoded_embed)
     assert sparse_encoded_tensor.samples == encoded_embed["samples"]
     assert sparse_encoded_tensor.dims == encoded_embed["dims"]
@@ -240,6 +242,8 @@ def test_sparse_encoded_tensor(encoded_embed):
 
     assert torch.equal(sparse_encoded_tensor.nz_tail, nz_tail)
 
+    assert torch.equal(sparse_encoded_tensor.nz_pos, nz_pos)
+
 
 def test_init_codec():
     assert SparseEncoder()
@@ -247,26 +251,48 @@ def test_init_codec():
 
 
 @pytest.mark.parametrize(
-    ("tensor"),
+    ("tensor", "nz_pos"),
     [
-        torch.ones(1024, 1024),
-        torch.zeros(1024, 1024),
-        torch.randn(1024, 1024),
+        (
+            torch.ones(1024, 1024),
+            None,
+        ),
+        (
+            torch.ones(1024, 1024),
+            (torch.FloatTensor(1024 * 1024).uniform_() > 0.8).bool(),
+        ),
+        (
+            torch.zeros(1024, 1024),
+            None,
+        ),
+        (
+            torch.zeros(1024, 1024),
+            (torch.FloatTensor(1024 * 1024).uniform_() > 0.8).bool(),
+        ),
+        (
+            torch.randn(1024, 1024),
+            None,
+        ),
+        (
+            torch.randn(1024, 1024),
+            (torch.FloatTensor(1024 * 1024).uniform_() > 0.8).bool(),
+        ),
     ],
 )
-def test_encode(tensor):
+def test_encode(tensor: torch.Tensor, nz_pos: torch.Tensor):
     samples = tensor.shape[0]
     dims = tensor.shape[1]
 
     dst = tensor.detach().cpu().t().reshape(-1)
     length = len(dst)
-    nz_pos = dst != 0
+    if nz_pos is None:
+        nz_pos = dst != 0
     non_zero_values = dst[nz_pos].to(torch.float16)
 
-    nz_pos = nz_pos.char()
+    nz_pos_char = nz_pos.char()
     ind = torch.arange(0, length)
 
-    nz_cp = nz_pos - torch.cat((torch.CharTensor([0]), nz_pos[0:-1]), 0)
+    nz_cp = nz_pos_char - torch.cat((torch.CharTensor([0]), nz_pos_char[0:-1]), 0)
     nz_head = ind[nz_cp == 1]
     nz_tail = ind[nz_cp == -1]
 
@@ -279,13 +305,14 @@ def test_encode(tensor):
     }
 
     encoder = SparseEncoder()
-    sparse_embed = encoder.encode(tensor)
+    sparse_embed = encoder.encode(tensor, nz_pos)
 
     assert expected["samples"] == sparse_embed.samples
     assert expected["dims"] == sparse_embed.dims
     assert torch.equal(expected["non_zero_values"], sparse_embed.non_zero_values)
     assert torch.equal(expected["nz_head"], sparse_embed.nz_head)
     assert torch.equal(expected["nz_tail"], sparse_embed.nz_tail)
+    assert torch.equal(nz_pos, sparse_embed.nz_pos)
 
     exported_sparse_embed = sparse_embed.export()
 
@@ -366,147 +393,6 @@ def test_server_model(model_bucket):
         saved_model = ServerModel(16, 1)
         saved_model.load_state_dict(torch.load(file_path))
         assert len(model.state_dict()) == len(saved_model.state_dict())
-
-
-@pytest.fixture
-def embed_test_params(request):
-    shape = request.param["shape"]
-    key = request.param["key"]
-    encode = request.param["encode"]
-
-    embed_num = np.random.rand(shape[0], shape[1])
-    expected = torch.FloatTensor(embed_num)
-    embed = json.dumps(expected.tolist())
-
-    if encode:
-        encoder = SparseEncoder()
-        embed = encoder.encode(expected).export_as_json()
-
-    bucket = create_test_bucket()
-    s3_object = boto3.resource("s3").Object(
-        bucket.name,
-        key,
-    )
-
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        file_path = f"{tmpdirname}/embed.json"
-        with open(file=file_path, mode="w") as f:
-            f.write(embed)
-        s3_object.upload_file(file_path)
-
-    yield {
-        "s3_url": S3Url(f"s3://{bucket.name}/{key}"),
-        "expected": expected,
-        "encode": encode,
-    }
-
-    bucket.objects.all().delete()
-    bucket.delete()
-
-
-@pytest.mark.parametrize(
-    "embed_test_params",
-    [
-        {
-            "shape": (9304, 4),
-            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-tr-embed-1.json",
-            "encode": False,
-        },
-        {
-            "shape": (3257, 4),
-            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-va-embed-2.json",
-            "encode": True,
-        },
-    ],
-    indirect=True,
-)
-def test_embed(embed_test_params):
-    s3_url = embed_test_params["s3_url"]
-    expected = embed_test_params["expected"]
-    encode = embed_test_params["encode"]
-
-    decoder = None
-    if encode:
-        decoder = SparseDecoder()
-    embed = Embed(url=s3_url, decoder=decoder)
-    assert torch.equal(expected.to(torch.float16), embed.value.to(torch.float16))
-
-
-@pytest.fixture
-def gradient_test_params(request):
-    shape = request.param["shape"]
-    key = request.param["key"]
-    encode = request.param["encode"]
-
-    gradient_num = np.random.rand(shape[0], shape[1])
-    gradient = torch.FloatTensor(gradient_num)
-
-    bucket = create_test_bucket()
-    s3_object = boto3.resource("s3").Object(
-        bucket.name,
-        key,
-    )
-
-    yield {
-        "value": gradient,
-        "s3_object": s3_object,
-        "encode": encode,
-    }
-
-    bucket.objects.all().delete()
-    bucket.delete()
-
-
-@pytest.mark.parametrize(
-    "gradient_test_params",
-    [
-        {
-            "shape": (9304, 4),
-            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.npy",
-            "encode": False,
-        },
-        {
-            "shape": (3257, 4),
-            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.npy",
-            "encode": True,
-        },
-    ],
-    indirect=True,
-)
-def test_gradient(gradient_test_params):
-    value = gradient_test_params["value"]
-    s3_object = gradient_test_params["s3_object"]
-    encode = gradient_test_params["encode"]
-
-    encoder = None
-    if encode:
-        encoder = SparseEncoder()
-
-    gradient = Gradient(
-        value=value,
-        s3_object=s3_object,
-        encoder=encoder,
-    )
-    assert gradient.value.tolist() == value.tolist()
-
-    s3_url = gradient.save()
-    assert s3_object.bucket_name == s3_url.bucket
-    assert s3_object.key == s3_url.key
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        file_path = f"{tmpdirname}/gradient.json"
-        s3_object = boto3.resource("s3").Object(s3_url.bucket, s3_url.key)
-        s3_object.download_file(file_path)
-        loaded_gradient = None
-        with open(file=file_path, mode="r") as f:
-            loaded_gradient = json.load(f)
-
-        if encode:
-            sparse_encoded_gradient = SparseEncodedTensor(loaded_gradient)
-            decoder = SparseDecoder()
-            actual = decoder.decode(sparse_encoded_gradient)
-        else:
-            actual = torch.Tensor(loaded_gradient)
-        assert torch.equal(value.to(torch.float16), actual.to(torch.float16))
 
 
 @pytest.fixture
