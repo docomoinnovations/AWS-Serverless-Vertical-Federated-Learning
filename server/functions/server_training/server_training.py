@@ -4,6 +4,8 @@ import json
 import numpy as np
 import random
 import tempfile
+import os
+from zipfile import ZipFile, ZIP_DEFLATED
 import boto3
 from typing import Dict, Optional
 from urllib.parse import urlparse
@@ -606,15 +608,20 @@ def lambda_handler(event, context):
 
         embed = None
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = f"{tmpdir}/embed.json"
+            path = f"{tmpdir}/embed.zip"
+            dist_dir = f"{tmpdir}/embed"
             s3_embed_object.download_file(path)
-            with open(path, "r") as f:
-                downloaded_embed = json.load(f)
-                if sparse_encoding:
-                    encoded_embeds[client_id] = SparseEncodedTensor(downloaded_embed)
-                    embed = decoder.decode(encoded_embeds[client_id])
-                else:
-                    embed = torch.FloatTensor(downloaded_embed)
+            downloaded_embed = None
+            with ZipFile(path, "r") as zipf:
+                zipf.extractall(dist_dir)
+                embed_file = os.listdir(dist_dir)[0]
+                with open(f"{dist_dir}/{embed_file}", "r") as f:
+                    downloaded_embed = json.load(f)
+            if sparse_encoding:
+                encoded_embeds[client_id] = SparseEncodedTensor(downloaded_embed)
+                embed = decoder.decode(encoded_embeds[client_id])
+            else:
+                embed = torch.FloatTensor(downloaded_embed)
         server_trainer.set_embed(
             client_id=client_id,
             embed=embed,
@@ -640,7 +647,7 @@ def lambda_handler(event, context):
             embed_url = S3Url(input_item["EmbedFile"])
             s3_gradient_object = boto3.resource("s3").Object(
                 embed_url.bucket,
-                f"{embed_url.prefix}{task_name}-gradient-{client_id}.json",
+                f"{embed_url.prefix}{task_name}-gradient-{client_id}.zip",
             )
 
             gradient = server_trainer.gradients[client_id].tolist()
@@ -652,9 +659,12 @@ def lambda_handler(event, context):
                 gradient = encoded_gradient.export()
             with tempfile.TemporaryDirectory() as tmpdirname:
                 file_path = f"{tmpdirname}/gradient.json"
+                zip_file = f"{tmpdirname}/gradient.zip"
                 with open(file=file_path, mode="w") as f:
                     json.dump(gradient, f)
-                s3_gradient_object.upload_file(file_path)
+                with ZipFile(zip_file, "w", compression=ZIP_DEFLATED) as zipf:
+                    zipf.write(file_path, arcname=file_path.split("/")[-1])
+                s3_gradient_object.upload_file(zip_file)
 
             gradient_files[
                 client_id

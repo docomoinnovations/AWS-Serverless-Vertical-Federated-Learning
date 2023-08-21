@@ -6,6 +6,7 @@ import tempfile
 import random
 import string
 import json
+from zipfile import ZipFile
 from codec import SparseEncoder, SparseDecoder
 from local_training import (
     S3Url,
@@ -168,9 +169,14 @@ def gradient_test_params(request):
 
     with tempfile.TemporaryDirectory() as tmpdirname:
         file_path = f"{tmpdirname}/gradient.json"
+        zip_file = f"{tmpdirname}/gradient.zip"
         with open(file=file_path, mode="w") as f:
             f.write(gradient)
-        s3_object.upload_file(file_path)
+
+        with ZipFile(zip_file, "w") as zipf:
+            zipf.write(file_path, arcname=file_path.split("/")[-1])
+
+        s3_object.upload_file(zip_file)
 
     yield {
         "s3_object": s3_object,
@@ -187,12 +193,12 @@ def gradient_test_params(request):
     [
         {
             "shape": (9304, 4),
-            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.json",
+            "key": "client1/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-1.zip",
             "encode": False,
         },
         {
             "shape": (3257, 4),
-            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.json",
+            "key": "client2/VFL-TASK-YYYY-MM-DD-HH-mm-ss-gradient-2.zip",
             "encode": True,
         },
     ],

@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import random
 import boto3
+from zipfile import ZipFile, ZIP_DEFLATED
 from typing import Optional
 from codec import SparseEncoder, SparseDecoder, SparseEncodedTensor, IDecoder, IEncoder
 
@@ -56,11 +57,15 @@ class Gradient:
         self.s3_object = s3_object
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            path = f"{tmpdirname}/gradient.json"
+            path = f"{tmpdirname}/gradient.zip"
+            dist_dir = f"{tmpdirname}/gradient"
             s3_object.download_file(path)
             gradient = None
-            with open(file=path, mode="r") as f:
-                gradient = json.load(f)
+            with ZipFile(path, "r") as zipf:
+                zipf.extractall(dist_dir)
+                gradient_file = os.listdir(dist_dir)[0]
+                with open(f"{dist_dir}/{gradient_file}", "r") as f:
+                    gradient = json.load(f)
             if decoder:
                 encoded_gradient = SparseEncodedTensor(gradient)
                 self.value = decoder.decode(encoded_gradient)
@@ -179,9 +184,12 @@ class ClientTrainer:
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = f"{tmpdirname}/embed.json"
+            zip_file = f"{tmpdirname}/embed.zip"
             with open(file=path, mode="w") as f:
                 f.write(embed)
-            s3_object.upload_file(path)
+            with ZipFile(zip_file, "w", compression=ZIP_DEFLATED) as zipf:
+                zipf.write(path, arcname=path.split("/")[-1])
+            s3_object.upload_file(zip_file)
 
     def save_va_embed(self, s3_object, encoder: Optional[IEncoder] = None) -> None:
         va_embed = self.va_embed
@@ -192,9 +200,12 @@ class ClientTrainer:
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = f"{tmpdirname}/va_embed.json"
+            zip_file = f"{tmpdirname}/va_embed.zip"
             with open(file=path, mode="w") as f:
                 f.write(va_embed)
-            s3_object.upload_file(path)
+            with ZipFile(zip_file, "w", compression=ZIP_DEFLATED) as zipf:
+                zipf.write(path, arcname=path.split("/")[-1])
+            s3_object.upload_file(zip_file)
 
     def forward(self, batch_size, batch_index) -> str:
         head = batch_index * batch_size
@@ -299,11 +310,11 @@ if __name__ == "__main__":
             )
             s3_tr_embed_object = s3.Object(
                 s3_bucket,
-                f"{iam_user_id}/{task_name}-tr-embed-{client_id}.json",
+                f"{iam_user_id}/{task_name}-tr-embed-{client_id}.zip",
             )
             s3_va_embed_object = s3.Object(
                 s3_bucket,
-                f"{iam_user_id}/{task_name}-va-embed-{client_id}.json",
+                f"{iam_user_id}/{task_name}-va-embed-{client_id}.zip",
             )
 
             if phase == "End":
