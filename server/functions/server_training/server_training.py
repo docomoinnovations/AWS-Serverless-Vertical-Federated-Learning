@@ -53,6 +53,15 @@ class SparseEncodedTensor:
         if "nz_tail" in encoded_embed:
             self.nz_tail = torch.Tensor(encoded_embed["nz_tail"]).long()
 
+    @property
+    def nz_pos(self):
+        length = self.samples * self.dims
+        nz_cp = torch.zeros(length, dtype=torch.int8)
+        nz_cp[self.nz_head] = 1
+        nz_cp[self.nz_tail] = -1
+
+        return torch.cumsum(nz_cp, dim=0).bool()
+
     def export(self) -> dict:
         return {
             "samples": self.samples,
@@ -90,12 +99,15 @@ class SparseEncoder(IEncoder):
     def __init__(self) -> None:
         super().__init__()
 
-    def encode(self, tensor: torch.FloatTensor) -> SparseEncodedTensor:
+    def encode(
+        self, tensor: torch.FloatTensor, nz_pos: Optional[torch.Tensor] = None
+    ) -> SparseEncodedTensor:
         samples = tensor.shape[0]
         dims = tensor.shape[1]
 
         dst = tensor.detach().t().reshape(-1)
-        nz_pos = dst != 0
+        if nz_pos is None:
+            nz_pos = dst != 0
         length = len(dst)
 
         non_zero_values = dst[nz_pos].to(torch.float16)
@@ -175,48 +187,6 @@ class Prediction:
             file_path = f"{tmpdirname}/prediction.npy"
             np.save(file_path, self.value, allow_pickle=False)
             self.s3_object.upload_file(file_path)
-
-
-class Embed:
-    def __init__(self, url: S3Url, decoder: Optional[IDecoder] = None) -> None:
-        self.url = url
-        s3_object = boto3.resource("s3").Object(url.bucket, url.key)
-
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/embed.json"
-            s3_object.download_file(file_path)
-            embed = None
-            with open(file=file_path, mode="r") as f:
-                embed = json.load(f)
-            if decoder:
-                encoded_embed = SparseEncodedTensor(embed)
-                self.value = decoder.decode(encoded_embed)
-            else:
-                self.value = torch.FloatTensor(embed)
-
-
-class Gradient:
-    def __init__(
-        self,
-        value: torch.FloatTensor,
-        s3_object,
-        encoder: Optional[IEncoder] = None,
-    ) -> None:
-        self.value = value
-        self.s3_object = s3_object
-        self.encoder = encoder
-
-    def save(self) -> S3Url:
-        gradient = self.value.tolist()
-        if self.encoder:
-            encoded_gradient = self.encoder.encode(self.value)
-            gradient = encoded_gradient.export()
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            file_path = f"{tmpdirname}/gradient.json"
-            with open(file=file_path, mode="w") as f:
-                json.dump(gradient, f)
-            self.s3_object.upload_file(file_path)
-        return S3Url(f"s3://{self.s3_object.bucket_name}/{self.s3_object.key}")
 
 
 class Loss:
@@ -356,8 +326,8 @@ class ServerTrainer:
         model: ServerModel,
         optimizer: torch.optim.Adam,
         dataset: DataSet,
-        embeds: Dict[str, Embed] = dict(),
-        gradients: Dict[str, Gradient] = dict(),
+        embeds: Dict[str, torch.Tensor] = dict(),
+        gradients: Dict[str, torch.Tensor] = dict(),
     ) -> None:
         self.task_name = training_session.task_name
         self.num_of_clients = training_session.num_of_clients
@@ -388,14 +358,14 @@ class ServerTrainer:
         self.model = model
         self.optimizer = optimizer
 
-    def set_embed(self, client_id: str, embed: Embed) -> None:
+    def set_embed(self, client_id: str, embed: torch.Tensor) -> None:
         self.embeds[client_id] = embed
 
-    def set_gradient(self, client_id: str, gradient: Gradient) -> None:
+    def set_gradient(self, client_id: str, gradient: torch.Tensor) -> None:
         self.gradients[client_id] = gradient
 
-    def save_gradient(self, client_id: str) -> S3Url:
-        return self.gradients[client_id].save()
+    def get_gradient(self, client_id: str) -> torch.Tensor:
+        return self.gradients[client_id]
 
     def save_model(self, s3_object) -> S3Url:
         return self.model.save(s3_object)
@@ -429,12 +399,12 @@ class ServerTrainer:
 
         sparse_embed_loss = 0
         for client_id in self.client_ids:
-            embed_tuple = (*embed_tuple, self.embeds[client_id].value)
-            self.embeds[client_id].value.requires_grad_(True)
+            embed_tuple = (*embed_tuple, self.embeds[client_id])
+            self.embeds[client_id].requires_grad_(True)
             if self.sparse_options.enabled:
                 sparse_embed_loss = (
                     sparse_embed_loss
-                    + torch.norm(self.embeds[client_id].value, p=1, dim=1).mean()
+                    + torch.norm(self.embeds[client_id], p=1, dim=1).mean()
                 )
         embed = torch.cat(embed_tuple, 1)
 
@@ -449,7 +419,7 @@ class ServerTrainer:
         self.optimizer.step()
         self.loss.total_tr_loss += loss.item()
         for client_id in self.client_ids:
-            self.gradients[client_id].value = self.embeds[client_id].value.grad.cpu()
+            self.gradients[client_id] = self.embeds[client_id].grad.cpu()
 
         self.tr_pred.value[head:tail, :] = torch.sigmoid(pred_y).detach().cpu().numpy()
 
@@ -462,7 +432,7 @@ class ServerTrainer:
         batch_y = self.va_y[head:tail, :]
         embed_tuple = ()
         for client_id in self.client_ids:
-            embed_tuple = (*embed_tuple, self.embeds[client_id].value)
+            embed_tuple = (*embed_tuple, self.embeds[client_id])
         embed = torch.cat(embed_tuple, 1)
 
         pred_y = self.model(embed)
@@ -626,25 +596,31 @@ def lambda_handler(event, context):
         return response
 
     # Set embed and gradient
+    if sparse_encoding:
+        encoded_embeds = dict()
+
     for input_item in input_items:
         client_id = input_item["MemberId"]
         url = S3Url(input_item["EmbedFile"])
-        embed = Embed(url=url, decoder=decoder)
+        s3_embed_object = boto3.resource("s3").Object(url.bucket, url.key)
+
+        embed = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/embed.json"
+            s3_embed_object.download_file(path)
+            with open(path, "r") as f:
+                downloaded_embed = json.load(f)
+                if sparse_encoding:
+                    encoded_embeds[client_id] = SparseEncodedTensor(downloaded_embed)
+                    embed = decoder.decode(encoded_embeds[client_id])
+                else:
+                    embed = torch.FloatTensor(downloaded_embed)
         server_trainer.set_embed(
             client_id=client_id,
             embed=embed,
         )
 
-        gradient_object = boto3.resource("s3").Object(
-            s3_bucket,
-            f"{url.prefix}{task_name}-gradient-{client_id}.json",
-        )
-        gradient_value = torch.FloatTensor(np.zeros(embed.value.shape))
-        gradient = Gradient(
-            value=gradient_value,
-            s3_object=gradient_object,
-            encoder=encoder,
-        )
+        gradient = torch.FloatTensor(np.zeros(embed.shape))
         server_trainer.set_gradient(client_id=client_id, gradient=gradient)
 
     response = None
@@ -661,8 +637,28 @@ def lambda_handler(event, context):
 
         for input_item in input_items:
             client_id = input_item["MemberId"]
-            url = server_trainer.save_gradient(client_id=client_id)
-            gradient_files[client_id] = url.url
+            embed_url = S3Url(input_item["EmbedFile"])
+            s3_gradient_object = boto3.resource("s3").Object(
+                embed_url.bucket,
+                f"{embed_url.prefix}{task_name}-gradient-{client_id}.json",
+            )
+
+            gradient = server_trainer.gradients[client_id].tolist()
+            if sparse_encoding:
+                encoded_gradient = encoder.encode(
+                    server_trainer.gradients[client_id],
+                    nz_pos=encoded_embeds[client_id].nz_pos,
+                )
+                gradient = encoded_gradient.export()
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                file_path = f"{tmpdirname}/gradient.json"
+                with open(file=file_path, mode="w") as f:
+                    json.dump(gradient, f)
+                s3_gradient_object.upload_file(file_path)
+
+            gradient_files[
+                client_id
+            ] = f"s3://{s3_gradient_object.bucket_name}/{s3_gradient_object.key}"
 
         # Save model and optimizer
         server_trainer.save_model(s3_model_object)

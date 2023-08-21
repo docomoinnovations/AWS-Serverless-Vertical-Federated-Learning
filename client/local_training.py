@@ -1,5 +1,6 @@
 import json
 import sys
+import os
 import tempfile
 from urllib.parse import urlparse
 import numpy as np
@@ -326,6 +327,7 @@ if __name__ == "__main__":
             is_next_batch = bool(message["IsNextBatch"])
             is_next_va_batch = bool(message["IsNextVaBatch"])
             epoch_index = int(message["EpochIndex"])
+            epoch_count = int(message["EpochCount"])
             is_next_epoch = bool(message["IsNextEpoch"])
             shuffled_index_path = message["ShuffledIndexPath"]
 
@@ -350,7 +352,7 @@ if __name__ == "__main__":
                 print("Saving model...")
                 client_trainer.commit_model()
             else:
-                print(f"Epoch Count: {int(epoch_index) + 1}")
+                print(f"Epoch Count: {int(epoch_index) + 1} / {epoch_count}")
                 print(f"Batch Count: {int(batch_index) + 1} / {batch_count}")
                 print(
                     f"Validation Batch Count: {int(va_batch_index) + 1} / {va_batch_count}"

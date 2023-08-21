@@ -1,6 +1,7 @@
 import abc
 import torch
 import json
+from typing import Optional
 
 
 class SparseEncodedTensor:
@@ -21,6 +22,15 @@ class SparseEncodedTensor:
             self.nz_head = torch.Tensor(encoded_embed["nz_head"]).long()
         if "nz_tail" in encoded_embed:
             self.nz_tail = torch.Tensor(encoded_embed["nz_tail"]).long()
+
+    @property
+    def nz_pos(self):
+        length = self.samples * self.dims
+        nz_cp = torch.zeros(length, dtype=torch.int8)
+        nz_cp[self.nz_head] = 1
+        nz_cp[self.nz_tail] = -1
+
+        return torch.cumsum(nz_cp, dim=0).bool()
 
     def export(self) -> dict:
         return {
@@ -59,12 +69,15 @@ class SparseEncoder(IEncoder):
     def __init__(self) -> None:
         super().__init__()
 
-    def encode(self, tensor: torch.FloatTensor) -> SparseEncodedTensor:
+    def encode(
+        self, tensor: torch.FloatTensor, nz_pos: Optional[torch.Tensor] = None
+    ) -> SparseEncodedTensor:
         samples = tensor.shape[0]
         dims = tensor.shape[1]
 
         dst = tensor.detach().t().reshape(-1)
-        nz_pos = dst != 0
+        if nz_pos is None:
+            nz_pos = dst != 0
         length = len(dst)
 
         non_zero_values = dst[nz_pos].to(torch.float16)
